@@ -1,0 +1,43 @@
+# Python / venv
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE / editor
+.vscode/
+.idea/
+.claude/
+
+# Claude Code / Cursor artifacts
+.cursor/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# User data — everything that represents private documents,
+# extracted content, or per-user runtime state stays out of git.
+# Demo content (if any) can be committed via a samples/ folder.
+sorted/
+inputs/
+outputs/
+results/
+
+# Server + debug logs
+*.log
+/tmp/
+
+# Generated Google Fonts CSS — the woff2 files are committed, but
+# the raw fonts.css from Google isn't needed (fonts.local.css is)
+fonts/fonts.css
