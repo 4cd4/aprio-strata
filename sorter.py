@@ -1589,7 +1589,7 @@ _SORTER_HTML_V2_DISABLED = r"""<!doctype html>
     position: fixed; pointer-events: none;
     background: var(--panel-2); border: 1px solid var(--border-2);
     border-radius: var(--radius-sm); padding: 14px 16px;
-    box-shadow: var(--shadow-lg); min-width: 280px; max-width: 380px;
+    box-shadow: var(--shadow-lg); min-width: 280px; max-width: 380px; overflow: hidden;
     z-index: 200; opacity: 0; transform: translateY(4px); transition: opacity .12s ease, transform .12s ease;
   }
   .tip.show { opacity: 1; transform: none; }
@@ -1598,11 +1598,15 @@ _SORTER_HTML_V2_DISABLED = r"""<!doctype html>
     color: var(--subtle); font-weight: 700; margin-bottom: 4px;
   }
   .tip .tip-original {
-    font: 13px ui-monospace, Menlo, monospace; color: var(--fg); margin-bottom: 14px; word-break: break-all; font-weight: 500;
+    font: 13px ui-monospace, Menlo, monospace; color: var(--fg); margin-bottom: 14px; font-weight: 500;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .tip .tip-row { display: flex; justify-content: space-between; font-size: 12px; gap: 12px; margin-top: 6px; }
-  .tip .tip-row .k { color: var(--subtle); }
-  .tip .tip-row .v { color: var(--fg-2); font-family: ui-monospace, Menlo, monospace; text-align: right; }
+  .tip .tip-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; gap: 12px; margin-top: 6px; min-width: 0; }
+  .tip .tip-row .k { color: var(--subtle); flex-shrink: 0; }
+  .tip .tip-row .v {
+    color: var(--fg-2); font-family: ui-monospace, Menlo, monospace; text-align: right;
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .tip .tip-sep { height: 1px; background: var(--border); margin: 10px 0; }
 
   /* ─── empty state ───────────────────────────────────── */
@@ -2145,7 +2149,6 @@ function showTip(e, f) {
     <div class="tip-row"><span class="k">Renamed to</span><span class="v">${escapeHTML(f.final_name)}</span></div>
     <div class="tip-row"><span class="k">Sorted</span><span class="v">${fmtAgo(f.applied_at)} · ${applied}</span></div>
     <div class="tip-row"><span class="k">Size</span><span class="v">${fmtSize(f.size)}</span></div>
-    ${f.hash ? `<div class="tip-row"><span class="k">SHA-256</span><span class="v">${f.hash.slice(0,16)}…</span></div>` : ""}
     ${f.is_duplicate ? `<div class="tip-row"><span class="k">Status</span><span class="v" style="color:var(--dup)">duplicate (quarantined)</span></div>` : ""}
   `;
   tip.style.display = "block";
@@ -2855,7 +2858,7 @@ input { font: inherit; color: inherit; }
    ═══════════════════════════════════════════════════════════════════ */
 .tip {
   position: fixed; pointer-events: none;
-  min-width: 300px; max-width: 380px;
+  min-width: 300px; max-width: 380px; overflow: hidden;
   padding: 14px 16px; border-radius: 14px;
   background: rgba(251, 250, 245, 0.96);
   backdrop-filter: blur(24px) saturate(160%);
@@ -2874,13 +2877,17 @@ input { font: inherit; color: inherit; }
 }
 .tip-og {
   font-family: var(--font-mono); font-size: 12.5px;
-  color: var(--ink); font-weight: 500; word-break: break-all;
+  color: var(--ink); font-weight: 500;
   line-height: 1.45; margin-bottom: 12px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tip-sep { height: 1px; background: rgba(28, 25, 23, 0.08); margin: 10px 0; }
-.tip-row { display: flex; justify-content: space-between; gap: 14px; font-size: 11.5px; margin: 5px 0; }
-.tip-row .k { color: var(--ink-faint); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; font-size: 10px; font-weight: 500; }
-.tip-row .v { color: var(--ink); font-family: var(--font-mono); text-align: right; }
+.tip-row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; font-size: 11.5px; margin: 5px 0; min-width: 0; }
+.tip-row .k { color: var(--ink-faint); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; font-size: 10px; font-weight: 500; flex-shrink: 0; }
+.tip-row .v {
+  color: var(--ink); font-family: var(--font-mono); text-align: right;
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .tip-echoes { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
 .tip-echo {
@@ -4033,7 +4040,6 @@ function renderPreview(body) {
         <div class="meta-row"><div class="k">Client</div><div class="v body">${esc(f.client || "Unassigned")}</div></div>
         <div class="meta-row"><div class="k">Size</div><div class="v">${fmtSize(f.size)}</div></div>
         <div class="meta-row"><div class="k">Deposited</div><div class="v body">${fmtAgo(f.applied_at)}</div></div>
-        ${f.hash ? `<div class="meta-row"><div class="k">SHA-256</div><div class="v">${esc(f.hash.slice(0,24))}…</div></div>` : ""}
         ${echoSection}
         <div class="preview-actions">
           <button class="pa-btn" onclick="closePreview()">
@@ -4076,7 +4082,6 @@ function showTip(e, f) {
     <div class="tip-row"><div class="k">client</div><div class="v">${esc(f.client || "Unassigned")}</div></div>
     <div class="tip-row"><div class="k">size</div><div class="v">${fmtSize(f.size)}</div></div>
     <div class="tip-row"><div class="k">deposited</div><div class="v">${fmtAgo(f.applied_at)}</div></div>
-    ${f.hash ? `<div class="tip-row"><div class="k">sha-256</div><div class="v">${esc(f.hash.slice(0,12))}…</div></div>` : ""}
     ${echoSection}`;
   tip.style.display = "block";
   positionTip(e);
