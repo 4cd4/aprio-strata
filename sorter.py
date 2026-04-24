@@ -9,6 +9,10 @@ Flow:
 3. Duplicates (by SHA-256) are flagged against `sorted/.manifest.json`.
 4. User reviews, edits, hits Apply — approved copies go to `sorted/`,
    duplicates to `sorted/duplicates/`, manifest updated.
+
+Analyst corrections for training are appended to `sorted/.analyst_events.jsonl`
+(legacy `sorted/.bucket_changes.jsonl` is still read for export/summary).
+See GET `/sorter/analyst-events/summary` and `/sorter/analyst-events/download`.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 from fastapi import APIRouter, Form, UploadFile
@@ -223,15 +227,32 @@ def ensure_client_taxonomy(manifest: dict, client: str) -> list[str]:
     return manifest["client_taxonomies"][client]
 
 
-# ── Training data log (append-only JSONL) ─────────────────────────────
-TRAINING_LOG = SORTED / ".bucket_changes.jsonl"
+# ── Analyst / model-correction log (append-only JSONL, local training data) ──
+ANALYST_EVENTS_PATH = SORTED / ".analyst_events.jsonl"
+LEGACY_ANALYST_LOG = SORTED / ".bucket_changes.jsonl"
 
 
 def log_training_event(event: dict) -> None:
-    """Append a bucket-related event to the training log."""
+    """Append one JSON object per line: analyst actions vs Gemma for model training."""
     event = {**event, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    with TRAINING_LOG.open("a") as f:
-        f.write(json.dumps(event) + "\n")
+    with ANALYST_EVENTS_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _iter_analyst_events() -> Iterator[dict]:
+    """Yield parsed events from current and legacy log files."""
+    for path in (ANALYST_EVENTS_PATH, LEGACY_ANALYST_LOG):
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except Exception:
+                    continue
 
 
 def sanitize_client(raw: str) -> str:
@@ -527,7 +548,22 @@ async def apply(payload: dict):
             shutil.copy2(src, dest)
             client_name = sanitize_client(d.get("client") or "")
             bucket_name = sanitize_bucket(d.get("bucket") or "")
-            manifest["files"].append({
+            raw_gemma_name = (d.get("gemma_suggested") or d.get("suggested") or "").strip()
+            gemma_stem = sanitize_snake(raw_gemma_name, original) if raw_gemma_name else None
+            gemma_bucket_in = sanitize_bucket(d.get("gemma_bucket") or "")
+            effective_gemma_bucket = gemma_bucket_in or bucket_name
+            filename_changed = bool(gemma_stem and gemma_stem != stem)
+            bucket_changed = bool(gemma_bucket_in and gemma_bucket_in != bucket_name)
+            collision_applied = dest.stem != stem
+            manifest.setdefault("clients", [])
+            client_was_new = client_name != _CLIENT_FALLBACK and client_name not in manifest["clients"]
+            taxonomy_bucket_new = False
+            if client_name != _CLIENT_FALLBACK:
+                bucket_list = ensure_client_taxonomy(manifest, client_name)
+                if bucket_name != _BUCKET_FALLBACK and bucket_name not in bucket_list:
+                    bucket_list.append(bucket_name)
+                    taxonomy_bucket_new = True
+            entry: dict[str, Any] = {
                 "hash": full_hash,
                 "original": original,
                 "final_name": dest.name,
@@ -535,26 +571,30 @@ async def apply(payload: dict):
                 "bucket": bucket_name,
                 "applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "echoes": [],
-            })
-            # register the client in the top-level list for empty-client support
-            manifest.setdefault("clients", [])
+                "gemma_bucket": effective_gemma_bucket,
+            }
+            if gemma_stem:
+                entry["gemma_suggested"] = gemma_stem
+            manifest["files"].append(entry)
             if client_name != _CLIENT_FALLBACK and client_name not in manifest["clients"]:
                 manifest["clients"].append(client_name)
-            # seed the client's default taxonomy if this is their first file
-            if client_name != _CLIENT_FALLBACK:
-                bucket_list = ensure_client_taxonomy(manifest, client_name)
-                # if Gemma invented a new bucket, add it to the client's taxonomy
-                if bucket_name != _BUCKET_FALLBACK and bucket_name not in bucket_list:
-                    bucket_list.append(bucket_name)
-            # log the initial classification as training data
             log_training_event({
-                "event": "initial",
+                "event": "deposit_accept",
                 "file": dest.name,
                 "hash": full_hash,
                 "client": client_name,
+                "original_upload": original,
+                "analyst_filename_stem": stem,
+                "gemma_suggested_stem": gemma_stem,
+                "filename_changed_from_gemma": filename_changed,
+                "collision_suffix_applied": collision_applied,
+                "analyst_bucket": bucket_name,
+                "gemma_predicted_bucket": effective_gemma_bucket,
+                "bucket_changed_from_gemma": bucket_changed,
+                "client_was_new_to_library": client_was_new,
+                "bucket_first_added_to_taxonomy": taxonomy_bucket_new,
                 "from_bucket": None,
                 "to_bucket": bucket_name,
-                "gemma_predicted_bucket": d.get("gemma_bucket") or bucket_name,
                 "markdown_preview": (d.get("preview") or "")[:200],
             })
             results.append({"id": d["id"], "ok": True, "final_path": str(dest.relative_to(BASE))})
@@ -573,6 +613,15 @@ async def apply(payload: dict):
                     "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     "source": "deposit",
                 })
+                log_training_event({
+                    "event": "deposit_duplicate_echo",
+                    "file": canonical["final_name"],
+                    "hash": full_hash,
+                    "client": canonical.get("client"),
+                    "original_upload": original,
+                    "echoed_into": canonical["final_name"],
+                    "dup_of": d.get("dup_of"),
+                })
                 results.append({
                     "id": d["id"],
                     "ok": True,
@@ -583,6 +632,12 @@ async def apply(payload: dict):
             try: src.unlink()
             except Exception: pass
         else:  # skip
+            log_training_event({
+                "event": "deposit_skip",
+                "original_upload": original,
+                "hash": d.get("hash"),
+                "temp_path": str(src),
+            })
             results.append({"id": d["id"], "ok": True, "skipped": True})
 
     _save_manifest(manifest)
@@ -644,6 +699,7 @@ async def bucket_move(payload: dict):
         if target != _BUCKET_FALLBACK and target not in blist:
             blist.append(target)
     _save_manifest(manifest)
+    gemma_b = entry.get("gemma_bucket") or entry.get("gemma_predicted_bucket")
     log_training_event({
         "event": "reassign",
         "file": final_name,
@@ -651,7 +707,9 @@ async def bucket_move(payload: dict):
         "client": client_name,
         "from_bucket": from_bucket,
         "to_bucket": target,
-        "gemma_predicted_bucket": entry.get("gemma_predicted_bucket"),
+        "gemma_predicted_bucket": gemma_b,
+        "bucket_changed_from_gemma": bool(gemma_b and target != gemma_b),
+        "bucket_changed_from_previous": from_bucket != target,
     })
     return JSONResponse({"ok": True, "from_bucket": from_bucket, "to_bucket": target})
 
@@ -669,15 +727,35 @@ async def bucket_add(payload: dict):
         return JSONResponse({"ok": False, "error": "bucket required"}, status_code=400)
     manifest = _load_manifest()
     manifest.setdefault("clients", [])
-    if client_name not in manifest["clients"]:
+    client_was_new_to_list = client_name not in manifest["clients"]
+    if client_was_new_to_list:
         manifest["clients"].append(client_name)
     blist = ensure_client_taxonomy(manifest, client_name)
-    changed = False
-    if bucket not in blist:
+    bucket_was_new = bucket not in blist
+    if bucket_was_new:
         blist.append(bucket)
-        changed = True
     _save_manifest(manifest)
-    return JSONResponse({"ok": True, "bucket": bucket, "taxonomy": blist, "created_client": changed})
+    if bucket_was_new:
+        log_training_event({
+            "event": "bucket_created",
+            "client": client_name,
+            "bucket": bucket,
+            "taxonomy_size_after": len(blist),
+            "source": "bucket_add_endpoint",
+        })
+    if client_was_new_to_list:
+        log_training_event({
+            "event": "client_registered",
+            "client": client_name,
+            "source": "bucket_add_endpoint",
+        })
+    return JSONResponse({
+        "ok": True,
+        "bucket": bucket,
+        "taxonomy": blist,
+        "created_bucket": bucket_was_new,
+        "created_client": client_was_new_to_list,
+    })
 
 
 @router.post("/bucket/remove")
@@ -694,34 +772,93 @@ async def bucket_remove(payload: dict):
     if bucket in blist:
         blist.remove(bucket)
         _save_manifest(manifest)
+        log_training_event({
+            "event": "bucket_removed",
+            "client": client_name,
+            "bucket": bucket,
+            "taxonomy_size_after": len(blist),
+        })
     return JSONResponse({"ok": True, "taxonomy": blist})
 
 
 @router.get("/training/export")
 async def training_export():
-    """Return the bucket-change training log as CSV."""
+    """Return analyst/model correction events as CSV (includes legacy `.bucket_changes.jsonl`)."""
     from fastapi.responses import Response
     import csv, io
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["at", "event", "file", "hash", "client", "from_bucket", "to_bucket", "gemma_predicted_bucket", "markdown_preview"])
-    if TRAINING_LOG.exists():
-        for line in TRAINING_LOG.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
-            writer.writerow([
-                e.get("at", ""), e.get("event", ""), e.get("file", ""), e.get("hash", ""),
-                e.get("client", ""), e.get("from_bucket") or "", e.get("to_bucket") or "",
-                e.get("gemma_predicted_bucket") or "", (e.get("markdown_preview") or "").replace("\n", " ")[:500],
-            ])
+    header = [
+        "at", "event", "file", "hash", "client", "original_upload",
+        "from_name", "to_name", "from_bucket", "to_bucket", "from_client", "to_client",
+        "gemma_predicted_bucket", "gemma_suggested_stem", "analyst_filename_stem",
+        "filename_changed_from_gemma", "bucket_changed_from_gemma", "markdown_preview", "payload_json",
+    ]
+    writer.writerow(header)
+    for e in _iter_analyst_events():
+        writer.writerow([
+            e.get("at", ""), e.get("event", ""), e.get("file", ""), e.get("hash", ""),
+            e.get("client", ""), e.get("original_upload") or e.get("original_upload_name") or "",
+            e.get("from_name", ""), e.get("to_name", ""),
+            e.get("from_bucket") or "", e.get("to_bucket") or "",
+            e.get("from_client") or "", e.get("to_client") or "",
+            e.get("gemma_predicted_bucket") or e.get("gemma_bucket_at_deposit") or "",
+            e.get("gemma_suggested_stem") or e.get("gemma_suggested_stem_at_deposit") or "",
+            e.get("analyst_filename_stem") or "",
+            e.get("filename_changed_from_gemma", e.get("filename_changed_from_gemma_after_rename", "")),
+            e.get("bucket_changed_from_gemma", ""),
+            (e.get("markdown_preview") or "").replace("\n", " ")[:500],
+            json.dumps(e, ensure_ascii=False)[:8000],
+        ])
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=bucket_changes.csv"},
+        headers={"Content-Disposition": "attachment; filename=analyst_events.csv"},
+    )
+
+
+@router.get("/analyst-events/summary")
+async def analyst_events_summary():
+    """Aggregate counts for dashboards / training prep (reads local JSONL)."""
+    from collections import Counter
+
+    events = list(_iter_analyst_events())
+    by_event = Counter(e.get("event") or "unknown" for e in events)
+    deposits = [e for e in events if e.get("event") in ("deposit_accept", "initial")]
+    renames = [e for e in events if e.get("event") == "file_rename"]
+    reassigns = [e for e in events if e.get("event") == "reassign"]
+    client_moves = [e for e in events if e.get("event") == "client_reassign"]
+    bucket_creates = [e for e in events if e.get("event") == "bucket_created"]
+    return JSONResponse({
+        "total_events": len(events),
+        "by_event": dict(by_event),
+        "deposit_accept_count": len(deposits),
+        "deposit_filename_corrections": sum(1 for e in deposits if e.get("filename_changed_from_gemma")),
+        "deposit_bucket_corrections": sum(1 for e in deposits if e.get("bucket_changed_from_gemma")),
+        "deposit_collision_suffixes": sum(1 for e in deposits if e.get("collision_suffix_applied")),
+        "deposit_new_taxonomy_buckets": sum(1 for e in deposits if e.get("bucket_first_added_to_taxonomy")),
+        "post_deposit_renames": len(renames),
+        "post_deposit_bucket_reassigns": len(reassigns),
+        "post_deposit_reassigns_vs_gemma": sum(1 for e in reassigns if e.get("bucket_changed_from_gemma")),
+        "client_reassigns": len(client_moves),
+        "buckets_created_via_ui": len(bucket_creates),
+        "log_paths": {"current": str(ANALYST_EVENTS_PATH), "legacy": str(LEGACY_ANALYST_LOG)},
+    })
+
+
+@router.get("/analyst-events/download")
+async def analyst_events_download():
+    """Download the raw append-only JSONL (and legacy file concatenated if present)."""
+    from fastapi.responses import Response
+    parts: list[str] = []
+    for path in (ANALYST_EVENTS_PATH, LEGACY_ANALYST_LOG):
+        if path.is_file():
+            parts.append(path.read_text(encoding="utf-8"))
+    body = "".join(parts) if parts else ""
+    return Response(
+        content=body,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": "attachment; filename=analyst_events.jsonl"},
     )
 
 
@@ -735,7 +872,9 @@ async def create_client(payload: dict):
     if name not in manifest["clients"]:
         manifest["clients"].append(name)
         _save_manifest(manifest)
-    return JSONResponse({"ok": True, "name": name})
+        log_training_event({"event": "client_created", "client": name, "source": "client_create_endpoint"})
+        return JSONResponse({"ok": True, "name": name, "created": True})
+    return JSONResponse({"ok": True, "name": name, "created": False})
 
 
 @router.post("/client/delete")
@@ -763,8 +902,10 @@ async def move_file(payload: dict):
         return JSONResponse({"ok": False, "error": "final_name required"}, status_code=400)
     manifest = _load_manifest()
     hit = False
+    from_client = _CLIENT_FALLBACK
     for e in manifest["files"]:
         if e["final_name"] == final_name:
+            from_client = e.get("client") or _CLIENT_FALLBACK
             e["client"] = client_name
             hit = True
             break
@@ -774,6 +915,13 @@ async def move_file(payload: dict):
     if client_name != _CLIENT_FALLBACK and client_name not in manifest["clients"]:
         manifest["clients"].append(client_name)
     _save_manifest(manifest)
+    if from_client != client_name:
+        log_training_event({
+            "event": "client_reassign",
+            "file": final_name,
+            "from_client": from_client,
+            "to_client": client_name,
+        })
     return JSONResponse({"ok": True, "client": client_name})
 
 
@@ -791,11 +939,29 @@ async def rename_file(payload: dict):
     dest = resolve_collision(SORTED, new_stem, ext)
     src.rename(dest)
     manifest = _load_manifest()
+    entry_snapshot: dict[str, Any] = {}
     for e in manifest["files"]:
         if e["final_name"] == final_name:
+            entry_snapshot = {
+                "hash": e.get("hash"),
+                "gemma_suggested": e.get("gemma_suggested"),
+                "gemma_bucket": e.get("gemma_bucket"),
+            }
             e["final_name"] = dest.name
             break
     _save_manifest(manifest)
+    log_training_event({
+        "event": "file_rename",
+        "from_name": final_name,
+        "to_name": dest.name,
+        "hash": entry_snapshot.get("hash"),
+        "gemma_suggested_stem_at_deposit": entry_snapshot.get("gemma_suggested"),
+        "gemma_bucket_at_deposit": entry_snapshot.get("gemma_bucket"),
+        "filename_changed_from_gemma_after_rename": bool(
+            entry_snapshot.get("gemma_suggested")
+            and entry_snapshot.get("gemma_suggested") != Path(dest.name).stem
+        ),
+    })
     return JSONResponse({"ok": True, "final_name": dest.name, "url": f"/sorted/{dest.name}"})
 
 
@@ -4449,8 +4615,8 @@ $("apply").onclick = async () => {
   for (const r of state.rows.values()) {
     if (!r.temp_path) continue;
     if (!r.accepted) { decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"skip"}); continue; }
-    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
-    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
+    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, gemma_suggested:r.suggested || "", preview:r.preview});
+    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, gemma_suggested:r.suggested || "", preview:r.preview});
   }
   if (!decisions.filter(d => d.status !== "skip").length) return;
   $("apply").disabled = true;
