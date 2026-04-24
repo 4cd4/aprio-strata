@@ -2472,6 +2472,19 @@ input { font: inherit; color: inherit; }
   font-family: var(--font-body);
 }
 .empty .ghost-btn:hover { background: var(--accent-soft); color: var(--accent-deep); }
+.local-note {
+  margin-top: 28px; display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-display); font-style: italic; font-size: 12.5px;
+  color: var(--ink-faint); padding: 6px 12px; border-radius: 999px;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.06);
+}
+.local-note svg { color: var(--accent); opacity: 0.7; }
+.side-local {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 2px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+  color: var(--ink-faint); opacity: 0.85;
+}
+.side-local svg { color: var(--accent); opacity: 0.7; flex-shrink: 0; }
 
 /* ═══════════════════════════════════════════════════════════════════
    UPLOAD DRAWER
@@ -2711,6 +2724,75 @@ input { font: inherit; color: inherit; }
 .toast .ok { color: #9FD4A8; font-style: normal; font-family: var(--font-body); font-weight: 600; }
 .toast .er { color: #E4A49A; font-style: normal; font-family: var(--font-body); font-weight: 600; }
 
+/* ═══════════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUT OVERLAY
+   ═══════════════════════════════════════════════════════════════════ */
+.shortcut-scrim {
+  position: fixed; inset: 0; background: rgba(28, 25, 23, 0.22);
+  backdrop-filter: blur(4px); z-index: 180;
+  opacity: 0; pointer-events: none; transition: opacity 180ms ease;
+}
+.shortcut-scrim.open { opacity: 1; pointer-events: auto; }
+.shortcut-overlay {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -48%); z-index: 200;
+  width: min(400px, 90vw); padding: 22px 24px;
+  border-radius: 18px; opacity: 0; pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.shortcut-overlay.open {
+  opacity: 1; transform: translate(-50%, -50%); pointer-events: auto;
+}
+.shortcut-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+}
+.shortcut-title {
+  font-family: var(--font-display); font-weight: 400; font-size: 20px;
+  letter-spacing: -0.01em; color: var(--ink);
+}
+.shortcut-close {
+  width: 26px; height: 26px; border-radius: 7px; font-size: 18px; line-height: 1;
+  color: var(--ink-faint); background: var(--paper-soft); border: 1px solid rgba(28,25,23,0.08);
+}
+.shortcut-close:hover { color: var(--ink); background: var(--paper-raised); }
+.shortcut-body { display: flex; flex-direction: column; gap: 8px; }
+.sk-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px; font-size: 13px; color: var(--ink-muted);
+}
+.sk-row span { margin-left: auto; color: var(--ink-muted); }
+.sk-row kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 6px;
+  background: var(--paper-soft); border: 1px solid rgba(28,25,23,0.1);
+  border-bottom-width: 2px; border-radius: 5px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--ink); box-shadow: 0 1px 0 rgba(28,25,23,0.04);
+}
+.shortcut-foot {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid rgba(28, 25, 23, 0.08);
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11.5px; color: var(--ink-faint);
+}
+.shortcut-foot svg { color: var(--accent); opacity: 0.7; flex-shrink: 0; }
+
+.help-fab {
+  position: fixed; bottom: 24px; right: 24px; z-index: 30;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--paper-raised); border: 1px solid rgba(28,25,23,0.1);
+  color: var(--ink-muted); font-weight: 600; font-size: 15px;
+  box-shadow: var(--shadow-sm); transition: all 140ms ease;
+}
+.help-fab:hover {
+  color: var(--accent-deep); background: var(--accent-wash);
+  border-color: var(--accent-soft); transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
 /* miscellaneous hidden inputs */
 .hidden { display: none !important; }
 </style>
@@ -2751,6 +2833,10 @@ input { font: inherit; color: inherit; }
       <button class="btn-deposit" id="btn-open-drawer">
         <span class="plus">+</span> Deposit files
       </button>
+      <div class="side-local" title="No files, metadata, or telemetry leaves this Mac.">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Runs entirely on your machine
+      </div>
     </div>
   </aside>
 
@@ -2804,6 +2890,27 @@ input { font: inherit; color: inherit; }
 <div class="tip" id="tip"></div>
 <div class="toast" id="toast"></div>
 <datalist id="clients-datalist"></datalist>
+
+<!-- keyboard shortcut overlay — toggled with ? -->
+<div class="shortcut-scrim" id="shortcut-scrim"></div>
+<aside class="shortcut-overlay glass glass--elevated" id="shortcut-overlay">
+  <div class="shortcut-hd">
+    <div class="shortcut-title">Keyboard</div>
+    <button class="shortcut-close" id="shortcut-close">×</button>
+  </div>
+  <div class="shortcut-body">
+    <div class="sk-row"><kbd>/</kbd><span>Focus search</span></div>
+    <div class="sk-row"><kbd>D</kbd><span>Open deposit drawer</span></div>
+    <div class="sk-row"><kbd>⌘</kbd><kbd>↵</kbd><span>Commit (in drawer)</span></div>
+    <div class="sk-row"><kbd>Esc</kbd><span>Close drawer / preview / this overlay</span></div>
+    <div class="sk-row"><kbd>?</kbd><span>Toggle this help</span></div>
+  </div>
+  <div class="shortcut-foot">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    Runs entirely on your machine. No cloud, no telemetry.
+  </div>
+</aside>
+<button class="help-fab" id="help-fab" title="Keyboard shortcuts (?)">?</button>
 
 <script>
 // ══════════════════════════════════════════════════════════════════
@@ -3031,6 +3138,10 @@ function render() {
         <div class="big">${isEmptyLib ? "The library is quiet." : "This folder is bare."}</div>
         <div class="small">${isEmptyLib ? "Create a client in the sidebar, or deposit files to get started." : "Nothing here yet. Drag files in from another folder or deposit new ones."}</div>
         <button class="ghost-btn" onclick="openDrawer()">+ Deposit files</button>
+        <div class="local-note">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Everything runs on this machine. No cloud, no telemetry.
+        </div>
       </div>`;
     return;
   }
@@ -3206,8 +3317,34 @@ function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove
 $("btn-open-drawer").onclick = openDrawer;
 $("btn-close-drawer").onclick = closeDrawer;
 scrim.onclick = closeDrawer;
+
+// Keyboard shortcuts
+const scOverlay = $("shortcut-overlay"), scScrim = $("shortcut-scrim");
+function openShortcuts() { scOverlay.classList.add("open"); scScrim.classList.add("open"); }
+function closeShortcuts() { scOverlay.classList.remove("open"); scScrim.classList.remove("open"); }
+$("help-fab").onclick = openShortcuts;
+$("shortcut-close").onclick = closeShortcuts;
+scScrim.onclick = closeShortcuts;
+
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeDrawer(); state.previewing && closePreview(); }
+  // Ignore shortcuts when user is typing in an input / textarea / contenteditable
+  const inField = e.target.matches("input, textarea, [contenteditable='true']");
+  if (e.key === "Escape") {
+    if (scOverlay.classList.contains("open")) { closeShortcuts(); return; }
+    if (drawer.classList.contains("open")) { closeDrawer(); return; }
+    if (state.previewing) { closePreview(); return; }
+    return;
+  }
+  if (inField) return;
+  if (e.key === "/") { e.preventDefault(); $("search").focus(); return; }
+  if (e.key === "?") { e.preventDefault(); scOverlay.classList.contains("open") ? closeShortcuts() : openShortcuts(); return; }
+  if (e.key.toLowerCase() === "d" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); openDrawer(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    if (drawer.classList.contains("open") && !$("apply").disabled) {
+      e.preventDefault(); $("apply").click();
+    }
+    return;
+  }
 });
 
 // drop zone

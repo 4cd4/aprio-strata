@@ -395,6 +395,16 @@ function handleEvent(ev) {
 """
 
 
+# Strata is the primary app — serve it at the root. The MinerU playground
+# stays available at /mineru for developer debugging, but isn't advertised.
+from sorter import sorter_index as _strata_index  # noqa: E402
+
+
 @app.get("/", response_class=HTMLResponse)
-def index():
+async def root():
+    return await _strata_index()
+
+
+@app.get("/mineru", response_class=HTMLResponse)
+def mineru_playground():
     return INDEX_HTML
