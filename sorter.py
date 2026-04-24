@@ -170,6 +170,69 @@ Client:"""
 _CLIENT_FALLBACK = "Unassigned"
 _CLIENT_SANITIZE = re.compile(r"[^A-Za-z0-9\-\s&\.,']")
 
+# Default buckets seeded for every new client. Each client can add/remove on top of these.
+DEFAULT_BUCKETS = ["Finance", "Tax", "Legal"]
+_BUCKET_FALLBACK = "Unfiled"
+_BUCKET_SANITIZE = re.compile(r"[^A-Za-z0-9\-\s&]")
+
+
+def sanitize_bucket(raw: str) -> str:
+    if not raw:
+        return _BUCKET_FALLBACK
+    s = raw.strip().strip("`*_\"'.")
+    s = s.splitlines()[0] if s.splitlines() else s
+    s = re.sub(r"^(?:bucket|category|label|type)\s*[:=]\s*", "", s, flags=re.I)
+    s = _BUCKET_SANITIZE.sub("", s).strip()
+    if not s:
+        return _BUCKET_FALLBACK
+    words = [w for w in re.split(r"\s+", s) if w]
+    words = [w[:1].upper() + w[1:].lower() for w in words]
+    out = " ".join(words[:3])[:30]
+    return out or _BUCKET_FALLBACK
+
+
+BUCKET_PROMPT = """Classify this accounting document into ONE of these buckets for the client "{client}":
+
+{bucket_list}
+
+STRICT OUTPUT RULES:
+- one bucket name only, matching the exact spelling from the list above
+- if none of the existing buckets fit and the document clearly belongs to a new category, you may output a short new bucket name (1-2 words, Title Case)
+- otherwise, output Unfiled
+- no explanation, no quotes, no markdown
+
+Document excerpt:
+---
+{md}
+---
+
+Bucket:"""
+
+
+def client_buckets(manifest: dict, client: str) -> list[str]:
+    """Return the bucket list for a given client (defaults if new)."""
+    taxonomies = manifest.get("client_taxonomies", {})
+    return taxonomies.get(client, list(DEFAULT_BUCKETS))
+
+
+def ensure_client_taxonomy(manifest: dict, client: str) -> list[str]:
+    """Seed the default taxonomy for a client if they don't have one yet."""
+    manifest.setdefault("client_taxonomies", {})
+    if client not in manifest["client_taxonomies"]:
+        manifest["client_taxonomies"][client] = list(DEFAULT_BUCKETS)
+    return manifest["client_taxonomies"][client]
+
+
+# ── Training data log (append-only JSONL) ─────────────────────────────
+TRAINING_LOG = SORTED / ".bucket_changes.jsonl"
+
+
+def log_training_event(event: dict) -> None:
+    """Append a bucket-related event to the training log."""
+    event = {**event, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    with TRAINING_LOG.open("a") as f:
+        f.write(json.dumps(event) + "\n")
+
 
 def sanitize_client(raw: str) -> str:
     if not raw:
@@ -258,9 +321,9 @@ async def stream_ollama(prompt: str, *, max_tokens: int = 60, temp: float = 0.3)
                     return
 
 
-async def suggest_name_and_client(md_text: str, fallback: str, emit_token, known_clients: list[str]):
-    """Stream the name tokens via emit_token(tok), then identify the client.
-    Returns (suggested_name, client)."""
+async def suggest_name_client_bucket(md_text: str, fallback: str, emit_token, known_clients: list[str], manifest: dict):
+    """Stream filename tokens via emit_token(tok), then infer client, then bucket.
+    Returns (suggested_name, client, bucket)."""
     prompt = NAME_PROMPT.format(md=_prep_for_llm(md_text))
     raw = ""
     try:
@@ -268,7 +331,7 @@ async def suggest_name_and_client(md_text: str, fallback: str, emit_token, known
             raw += tok
             await emit_token(tok)
     except Exception:
-        return sanitize_snake(f"error_{Path(fallback).stem}", fallback), _CLIENT_FALLBACK
+        return sanitize_snake(f"error_{Path(fallback).stem}", fallback), _CLIENT_FALLBACK, _BUCKET_FALLBACK
 
     first_line = next((ln for ln in raw.splitlines() if ln.strip()), "")
     suggested = sanitize_snake(first_line, fallback)
@@ -287,7 +350,23 @@ async def suggest_name_and_client(md_text: str, fallback: str, emit_token, known
     except Exception:
         client = _CLIENT_FALLBACK
 
-    return suggested, client
+    # bucket inference — per-client taxonomy, defaults for new clients
+    try:
+        buckets = client_buckets(manifest, client) if client != _CLIENT_FALLBACK else list(DEFAULT_BUCKETS)
+        bucket_list = "\n".join(f"- {b}" for b in buckets)
+        b_prompt = BUCKET_PROMPT.format(
+            md=_prep_for_llm(md_text, limit=1400),
+            client=client,
+            bucket_list=bucket_list,
+        )
+        raw_b = ""
+        async for tok in stream_ollama(b_prompt, max_tokens=10, temp=0.15):
+            raw_b += tok
+        bucket = sanitize_bucket(raw_b)
+    except Exception:
+        bucket = _BUCKET_FALLBACK
+
+    return suggested, client, bucket
 
 
 # ── routes ────────────────────────────────────────────────────────────
@@ -399,22 +478,23 @@ async def process(files: list[UploadFile]):
 
             async def worker():
                 try:
-                    result = await suggest_name_and_client(md_text, u["name"], emit_token_q, known_clients)
+                    result = await suggest_name_client_bucket(md_text, u["name"], emit_token_q, known_clients, manifest)
                     await queue.put(b"__RESULT__:" + json.dumps(result).encode())
                 except Exception:
-                    await queue.put(b"__RESULT__:" + json.dumps([sanitize_snake("", u["name"]), _CLIENT_FALLBACK]).encode())
+                    await queue.put(b"__RESULT__:" + json.dumps([sanitize_snake("", u["name"]), _CLIENT_FALLBACK, _BUCKET_FALLBACK]).encode())
                 finally:
                     await queue.put(None)
 
             task = asyncio.create_task(worker())
             suggested: str = ""
             client: str = _CLIENT_FALLBACK
+            bucket: str = _BUCKET_FALLBACK
             while True:
                 item = await queue.get()
                 if item is None:
                     break
                 if item.startswith(b"__RESULT__:"):
-                    suggested, client = json.loads(item[len(b"__RESULT__:"):])
+                    suggested, client, bucket = json.loads(item[len(b"__RESULT__:"):])
                     continue
                 yield item
             await task
@@ -425,6 +505,7 @@ async def process(files: list[UploadFile]):
                 "status": "ready",
                 "suggested": suggested,
                 "client": client,
+                "bucket": bucket,
                 "preview": md_text[:800],
                 "temp_path": u["path"],
             })
@@ -455,11 +536,13 @@ async def apply(payload: dict):
             dest = resolve_collision(SORTED, stem, ext)
             shutil.copy2(src, dest)
             client_name = sanitize_client(d.get("client") or "")
+            bucket_name = sanitize_bucket(d.get("bucket") or "")
             manifest["files"].append({
                 "hash": full_hash,
                 "original": original,
                 "final_name": dest.name,
                 "client": client_name,
+                "bucket": bucket_name,
                 "applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "echoes": [],
             })
@@ -467,6 +550,23 @@ async def apply(payload: dict):
             manifest.setdefault("clients", [])
             if client_name != _CLIENT_FALLBACK and client_name not in manifest["clients"]:
                 manifest["clients"].append(client_name)
+            # seed the client's default taxonomy if this is their first file
+            if client_name != _CLIENT_FALLBACK:
+                bucket_list = ensure_client_taxonomy(manifest, client_name)
+                # if Gemma invented a new bucket, add it to the client's taxonomy
+                if bucket_name != _BUCKET_FALLBACK and bucket_name not in bucket_list:
+                    bucket_list.append(bucket_name)
+            # log the initial classification as training data
+            log_training_event({
+                "event": "initial",
+                "file": dest.name,
+                "hash": full_hash,
+                "client": client_name,
+                "from_bucket": None,
+                "to_bucket": bucket_name,
+                "gemma_predicted_bucket": d.get("gemma_bucket") or bucket_name,
+                "markdown_preview": (d.get("preview") or "")[:200],
+            })
             results.append({"id": d["id"], "ok": True, "final_path": str(dest.relative_to(BASE))})
 
         elif status == "duplicate":
@@ -516,16 +616,115 @@ async def list_files():
         out.append({
             **e,
             "client": e.get("client") or _CLIENT_FALLBACK,
+            "bucket": e.get("bucket") or _BUCKET_FALLBACK,
             "size": p.stat().st_size if exists else None,
             "exists": exists,
             "url": f"/sorted/{e['final_name']}" if exists else None,
             "echoes": echoes,
             "echo_count": len(echoes),
-            "is_duplicate": False,   # kept for UI backwards-compat; no file is a "duplicate" anymore
+            "is_duplicate": False,
         })
-    # surface the canonical clients list (includes empty client folders)
     clients = sorted(set(manifest.get("clients", [])))
-    return JSONResponse({"files": out, "clients": clients})
+    # Per-client taxonomy: each client gets their own bucket list (defaults seeded on first file).
+    taxonomies = {}
+    for c in clients:
+        taxonomies[c] = client_buckets(manifest, c)
+    return JSONResponse({"files": out, "clients": clients, "client_taxonomies": taxonomies})
+
+
+# ── bucket endpoints ──────────────────────────────────────────────────
+@router.post("/bucket/move")
+async def bucket_move(payload: dict):
+    """Reassign a file to a different bucket. payload = {final_name, bucket}"""
+    final_name = payload.get("final_name")
+    target = sanitize_bucket(payload.get("bucket") or "")
+    if not final_name:
+        return JSONResponse({"ok": False, "error": "final_name required"}, status_code=400)
+    manifest = _load_manifest()
+    entry = next((e for e in manifest["files"] if e["final_name"] == final_name), None)
+    if entry is None:
+        return JSONResponse({"ok": False, "error": "not in manifest"}, status_code=404)
+    from_bucket = entry.get("bucket") or _BUCKET_FALLBACK
+    entry["bucket"] = target
+    # add to client's taxonomy if it's a new bucket
+    client_name = entry.get("client") or _CLIENT_FALLBACK
+    if client_name != _CLIENT_FALLBACK:
+        blist = ensure_client_taxonomy(manifest, client_name)
+        if target != _BUCKET_FALLBACK and target not in blist:
+            blist.append(target)
+    _save_manifest(manifest)
+    log_training_event({
+        "event": "reassign",
+        "file": final_name,
+        "hash": entry.get("hash"),
+        "client": client_name,
+        "from_bucket": from_bucket,
+        "to_bucket": target,
+        "gemma_predicted_bucket": entry.get("gemma_predicted_bucket"),
+    })
+    return JSONResponse({"ok": True, "from_bucket": from_bucket, "to_bucket": target})
+
+
+@router.post("/bucket/add")
+async def bucket_add(payload: dict):
+    """Add a new bucket to a client's taxonomy. payload = {client, bucket}"""
+    client_name = sanitize_client(payload.get("client") or "")
+    bucket = sanitize_bucket(payload.get("bucket") or "")
+    if not client_name or client_name == _CLIENT_FALLBACK:
+        return JSONResponse({"ok": False, "error": "client required"}, status_code=400)
+    if not bucket or bucket == _BUCKET_FALLBACK:
+        return JSONResponse({"ok": False, "error": "bucket required"}, status_code=400)
+    manifest = _load_manifest()
+    blist = ensure_client_taxonomy(manifest, client_name)
+    if bucket not in blist:
+        blist.append(bucket)
+        _save_manifest(manifest)
+    return JSONResponse({"ok": True, "bucket": bucket, "taxonomy": blist})
+
+
+@router.post("/bucket/remove")
+async def bucket_remove(payload: dict):
+    """Remove an empty bucket from a client's taxonomy."""
+    client_name = sanitize_client(payload.get("client") or "")
+    bucket = sanitize_bucket(payload.get("bucket") or "")
+    manifest = _load_manifest()
+    blist = ensure_client_taxonomy(manifest, client_name)
+    # refuse to remove if any file still uses this bucket
+    in_use = any(e.get("client") == client_name and e.get("bucket") == bucket for e in manifest["files"])
+    if in_use:
+        return JSONResponse({"ok": False, "error": "bucket has files — reassign them first"}, status_code=400)
+    if bucket in blist:
+        blist.remove(bucket)
+        _save_manifest(manifest)
+    return JSONResponse({"ok": True, "taxonomy": blist})
+
+
+@router.get("/training/export")
+async def training_export():
+    """Return the bucket-change training log as CSV."""
+    from fastapi.responses import Response
+    import csv, io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["at", "event", "file", "hash", "client", "from_bucket", "to_bucket", "gemma_predicted_bucket", "markdown_preview"])
+    if TRAINING_LOG.exists():
+        for line in TRAINING_LOG.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            writer.writerow([
+                e.get("at", ""), e.get("event", ""), e.get("file", ""), e.get("hash", ""),
+                e.get("client", ""), e.get("from_bucket") or "", e.get("to_bucket") or "",
+                e.get("gemma_predicted_bucket") or "", (e.get("markdown_preview") or "").replace("\n", " ")[:500],
+            ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=bucket_changes.csv"},
+    )
 
 
 @router.post("/client/create")
@@ -2793,6 +2992,202 @@ input { font: inherit; color: inherit; }
   box-shadow: var(--shadow-md);
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   EXPANDABLE CLIENTS + NESTED BUCKETS
+   ═══════════════════════════════════════════════════════════════════ */
+.cat { grid-template-columns: 14px 1fr auto auto; padding: 8px 12px 8px 10px; }
+.cat .chev {
+  display: grid; place-items: center; color: var(--ink-faint);
+  transition: transform 140ms ease; line-height: 0;
+}
+.cat .chev.open { transform: rotate(90deg); color: var(--accent); }
+.cat .cat-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat.active .cat-label { font-weight: 500; }
+
+.bucket-row {
+  display: grid; grid-template-columns: 24px 1fr auto auto;
+  align-items: center; gap: 8px; padding: 6px 10px 6px 26px;
+  color: var(--ink-faint); font-size: 12px; cursor: pointer;
+  border-radius: 8px; transition: all 140ms ease;
+  position: relative;
+}
+.bucket-row::before {
+  content: ""; position: absolute; left: 18px; top: -4px; bottom: 50%;
+  border-left: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom-left-radius: 6px; width: 8px;
+}
+.bucket-row:hover { background: rgba(28, 25, 23, 0.03); color: var(--ink); }
+.bucket-row.active {
+  background: var(--accent-wash); color: var(--accent-deep); font-weight: 500;
+}
+.bucket-row.active::before { border-color: var(--accent-soft); }
+.bucket-row.dragover { background: var(--accent-soft); color: var(--accent-deep); }
+.bucket-row .bucket-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; opacity: 0.5; justify-self: center;
+}
+.bucket-row.active .bucket-dot { opacity: 1; background: var(--accent); }
+.bucket-row .count {
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint);
+  padding: 1px 6px; border-radius: 999px; background: rgba(28, 25, 23, 0.04);
+}
+.bucket-row.active .count { color: var(--accent-deep); background: var(--accent-soft); }
+.bucket-row .del-bucket {
+  opacity: 0; color: var(--ink-faint); font-size: 11px; background: transparent; border: none;
+  width: 16px; height: 16px; border-radius: 3px; line-height: 1;
+  transition: all 140ms ease;
+}
+.bucket-row:hover .del-bucket { opacity: 1; }
+.bucket-row .del-bucket:hover { color: var(--danger); background: var(--danger-wash); }
+
+.bucket-add-row {
+  display: grid; grid-template-columns: 24px 1fr auto;
+  align-items: center; gap: 8px; padding: 6px 10px 6px 26px;
+  color: var(--ink-faint); font-size: 11.5px; cursor: pointer;
+  border-radius: 8px; transition: all 140ms ease;
+  font-family: var(--font-display); font-style: italic;
+  opacity: 0.65; position: relative;
+}
+.bucket-add-row::before {
+  content: ""; position: absolute; left: 18px; top: -4px; bottom: 50%;
+  border-left: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom-left-radius: 6px; width: 8px;
+}
+.bucket-add-row:hover { opacity: 1; color: var(--accent-deep); background: var(--accent-wash); }
+.bucket-add-row .bucket-dot.add {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; opacity: 0.5; justify-self: center;
+  border: 1px dashed currentColor; background: transparent;
+}
+.bucket-add-row .plus-tiny {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+  font-style: normal;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SECTION HEADERS (grouped-by-bucket)
+   ═══════════════════════════════════════════════════════════════════ */
+.section { margin-bottom: 28px; }
+.section:last-child { margin-bottom: 0; }
+.section-head {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid rgba(28, 25, 23, 0.06);
+}
+.section-label {
+  font-family: var(--font-display); font-weight: 400; font-size: 16px;
+  letter-spacing: -0.01em; color: var(--ink);
+}
+.section-count {
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--ink-faint); letter-spacing: 0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARD BUCKET PILL + SELECTED STATE
+   ═══════════════════════════════════════════════════════════════════ */
+.card { position: relative; padding-bottom: 38px; }
+.card .bucket-pill {
+  position: absolute; bottom: 10px; left: 14px; right: 14px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: 8px;
+  background: rgba(28, 25, 23, 0.04);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  color: var(--ink-muted); font-family: var(--font-body); font-size: 11px; font-weight: 500;
+  cursor: pointer; transition: all 140ms ease; justify-content: flex-start;
+}
+.card .bucket-pill svg { opacity: 0.55; flex-shrink: 0; }
+.card .bucket-pill:hover {
+  background: var(--accent-wash); border-color: var(--accent-soft); color: var(--accent-deep);
+}
+.card .bucket-pill:hover svg { opacity: 0.85; color: var(--accent); }
+.card.is-selected {
+  border-color: var(--accent); box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-wash);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BUCKET POPOVER
+   ═══════════════════════════════════════════════════════════════════ */
+.bucket-popover {
+  position: fixed; z-index: 180;
+  width: 240px; padding: 10px;
+  border-radius: 12px;
+  animation: pop-in 140ms cubic-bezier(.2,.9,.2,1);
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.bp-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 8px 10px; border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+}
+.bp-title {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint); font-weight: 600;
+}
+.bp-sub { font-size: 11.5px; color: var(--ink-muted); margin-left: auto; font-family: var(--font-mono); }
+.bp-options { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.bp-option {
+  display: flex; align-items: center; padding: 7px 10px; border-radius: 7px;
+  font-family: var(--font-body); font-size: 13px; color: var(--ink-muted); text-align: left;
+  background: transparent; border: none; transition: all 120ms ease;
+}
+.bp-option:hover { background: var(--accent-wash); color: var(--accent-deep); }
+.bp-option.current {
+  background: var(--accent-soft); color: var(--accent-deep); font-weight: 500;
+}
+.bp-option.current::after {
+  content: "✓"; margin-left: auto; opacity: 0.7;
+}
+.bp-option.bp-new {
+  font-style: italic; font-family: var(--font-display); color: var(--ink-faint);
+  margin-top: 4px; border-top: 1px dashed rgba(28, 25, 23, 0.06); padding-top: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BULK ACTION BAR
+   ═══════════════════════════════════════════════════════════════════ */
+.bulk-bar {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  z-index: 60; padding: 8px 10px;
+  border-radius: 14px; display: flex; align-items: center; gap: 12px;
+  transition: opacity 200ms cubic-bezier(.2,.9,.2,1), transform 200ms cubic-bezier(.2,.9,.2,1);
+}
+.bulk-bar.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.bb-count {
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted);
+  padding: 0 10px;
+}
+.bb-count b { color: var(--ink); font-weight: 600; }
+.bb-actions { display: flex; align-items: center; gap: 4px; }
+.bb-label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint); font-weight: 600; padding-right: 6px;
+}
+.bb-bucket {
+  padding: 6px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 500;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.08);
+  color: var(--ink); transition: all 140ms ease; font-family: var(--font-body);
+}
+.bb-bucket:hover {
+  background: var(--accent-wash); border-color: var(--accent-soft); color: var(--accent-deep);
+}
+.bb-clear {
+  padding: 6px 10px; border-radius: 8px; font-size: 12px;
+  background: transparent; color: var(--ink-faint); border: 1px solid transparent;
+  margin-left: 4px;
+}
+.bb-clear:hover { color: var(--danger); background: var(--danger-wash); }
+
+.undo-link {
+  color: var(--accent); font-family: var(--font-body); font-style: normal;
+  font-weight: 600; text-decoration: underline; cursor: pointer;
+  margin-left: 4px; pointer-events: auto;
+}
+
 /* miscellaneous hidden inputs */
 .hidden { display: none !important; }
 </style>
@@ -2890,6 +3285,7 @@ input { font: inherit; color: inherit; }
 <div class="tip" id="tip"></div>
 <div class="toast" id="toast"></div>
 <datalist id="clients-datalist"></datalist>
+<datalist id="buckets-datalist"></datalist>
 
 <!-- keyboard shortcut overlay — toggled with ? -->
 <div class="shortcut-scrim" id="shortcut-scrim"></div>
@@ -2923,10 +3319,14 @@ const esc = s => (s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"
 const state = {
   files: [],                 // sorted library (from /sorter/files)
   clients: [],               // all known clients (includes empty folders)
-  activeCategory: null,      // which sidebar client selected (client name or "__dup__")
+  taxonomies: {},            // client_name -> [bucket, bucket, ...]
+  activeClient: null,        // client name currently selected
+  activeBucket: null,        // null = all buckets for that client; string = specific bucket
+  expanded: new Set(),       // clients currently expanded in the sidebar
   search: "",
-  previewing: null,          // file being previewed, or null for grid mode
+  previewing: null,
   rows: new Map(),           // upload queue
+  selectedCards: new Set(),  // multi-select in content pane (final_names)
 };
 
 // ══════════════════════════════════════════════════════════════════
@@ -2958,27 +3358,30 @@ async function loadFiles() {
     const d = await r.json();
     state.files = d.files || [];
     state.clients = d.clients || [];
-  } catch { state.files = []; state.clients = []; }
-  // Pick a sensible default on first load: the client with the most recently
-  // deposited file. If none, fall back to the first client in the list.
-  if (state.activeCategory === null) {
+    state.taxonomies = d.client_taxonomies || {};
+  } catch { state.files = []; state.clients = []; state.taxonomies = {}; }
+  // Pick a sensible default on first load: client with the most-recent file.
+  if (state.activeClient === null) {
     const clients = allClients();
     if (clients.length) {
       const latestByClient = new Map();
       for (const f of state.files) {
-        if (f.is_duplicate || !f.client) continue;
+        if (!f.client) continue;
         const prev = latestByClient.get(f.client);
         if (!prev || f.applied_at > prev) latestByClient.set(f.client, f.applied_at);
       }
       const mostRecent = [...latestByClient.entries()].sort((a,b) => b[1].localeCompare(a[1]))[0];
-      state.activeCategory = mostRecent ? mostRecent[0] : clients[0];
-    } else {
-      state.activeCategory = "__empty__";
+      state.activeClient = mostRecent ? mostRecent[0] : clients[0];
+      state.expanded.add(state.activeClient);
     }
   }
   renderSidebar();
   render();
   refreshClientDatalist();
+}
+
+function bucketsFor(client) {
+  return state.taxonomies[client] || ["Finance", "Tax", "Legal"];
 }
 
 function allClients() {
@@ -2993,8 +3396,14 @@ function allClients() {
 
 function refreshClientDatalist() {
   const dl = document.getElementById("clients-datalist");
-  if (!dl) return;
-  dl.innerHTML = allClients().map(c => `<option value="${esc(c)}"></option>`).join("");
+  if (dl) dl.innerHTML = allClients().map(c => `<option value="${esc(c)}"></option>`).join("");
+  const bdl = document.getElementById("buckets-datalist");
+  if (bdl) {
+    const all = new Set();
+    for (const c of allClients()) bucketsFor(c).forEach(b => all.add(b));
+    ["Finance", "Tax", "Legal", "Unfiled"].forEach(b => all.add(b));
+    bdl.innerHTML = [...all].sort().map(b => `<option value="${esc(b)}"></option>`).join("");
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -3002,79 +3411,200 @@ function refreshClientDatalist() {
 // ══════════════════════════════════════════════════════════════════
 function renderSidebar() {
   const list = $("cat-list");
-  const counts = new Map();
-  for (const c of allClients()) counts.set(c, 0);
-  for (const f of state.files) {
-    if (f.is_duplicate) continue;
-    const c = f.client || "Unassigned";
-    counts.set(c, (counts.get(c) || 0) + 1);
-  }
-  // (Duplicates section was removed; dup count is no longer surfaced in sidebar.)
-
-  // rebuild client entries (the list has no pinned entries any more)
   list.innerHTML = "";
-  const entries = [...counts.entries()].sort((a, b) => {
+
+  // Counts: files per client AND per client+bucket combo.
+  const clientCounts = new Map();
+  const bucketCounts = new Map();
+  for (const c of allClients()) clientCounts.set(c, 0);
+  for (const f of state.files) {
+    const c = f.client || "Unassigned";
+    clientCounts.set(c, (clientCounts.get(c) || 0) + 1);
+    const b = f.bucket || "Unfiled";
+    bucketCounts.set(c + "::" + b, (bucketCounts.get(c + "::" + b) || 0) + 1);
+  }
+  const hasUnassigned = state.files.some(f => f.client === "Unassigned" || !f.client);
+
+  const entries = [...clientCounts.entries()].sort((a, b) => {
     if (a[0] === "Unassigned") return 1;
     if (b[0] === "Unassigned") return -1;
     return a[0].localeCompare(b[0]);
-  });
-  // append an "Unassigned" bucket only if there are any unassigned files
-  const hasUnassigned = state.files.some(f => !f.is_duplicate && (f.client === "Unassigned" || !f.client));
-  const finalEntries = entries.filter(([c, n]) => c !== "Unassigned" || (hasUnassigned && n > 0));
+  }).filter(([c, n]) => c !== "Unassigned" || (hasUnassigned && n > 0));
 
-  for (const [name, n] of finalEntries) {
-    const el = document.createElement("div");
-    el.className = "cat" + (state.activeCategory === name ? " active" : "");
-    el.dataset.cat = name;
+  for (const [name, n] of entries) {
+    const isExpanded = state.expanded.has(name);
+    const isActiveClient = state.activeClient === name && state.activeBucket === null;
+
+    const clientRow = document.createElement("div");
+    clientRow.className = "cat" + (isActiveClient ? " active" : "");
+    clientRow.dataset.client = name;
     const canDelete = name !== "Unassigned" && n === 0;
-    el.innerHTML = `<div class="dot"></div><div>${esc(name)}</div>${canDelete ? '<button class="del" title="Remove client folder">×</button>' : ''}<div class="count">${n}</div>`;
-    list.appendChild(el);
+    clientRow.innerHTML = `
+      <div class="chev ${isExpanded ? "open" : ""}">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="cat-label">${esc(name)}</div>
+      ${canDelete ? '<button class="del" title="Remove client folder">×</button>' : ""}
+      <div class="count">${n}</div>`;
+    list.appendChild(clientRow);
+
+    if (isExpanded) {
+      const fromTax = bucketsFor(name);
+      const fromFiles = new Set();
+      for (const f of state.files) {
+        if ((f.client || "Unassigned") === name) fromFiles.add(f.bucket || "Unfiled");
+      }
+      const bucketsToShow = [...new Set([...fromTax, ...fromFiles])].sort((a, b) => {
+        if (a === "Unfiled") return 1; if (b === "Unfiled") return -1;
+        return a.localeCompare(b);
+      });
+
+      for (const b of bucketsToShow) {
+        const bc = bucketCounts.get(name + "::" + b) || 0;
+        const isActiveBucket = state.activeClient === name && state.activeBucket === b;
+        const canDeleteBucket = bc === 0 && b !== "Unfiled";
+        const bRow = document.createElement("div");
+        bRow.className = "bucket-row" + (isActiveBucket ? " active" : "");
+        bRow.dataset.client = name;
+        bRow.dataset.bucket = b;
+        bRow.innerHTML = `
+          <div class="bucket-dot"></div>
+          <div class="bucket-label">${esc(b)}</div>
+          ${canDeleteBucket ? '<button class="del-bucket" title="Remove empty bucket">×</button>' : ""}
+          <div class="count">${bc}</div>`;
+        list.appendChild(bRow);
+      }
+
+      const addRow = document.createElement("div");
+      addRow.className = "bucket-add-row";
+      addRow.dataset.client = name;
+      addRow.innerHTML = `<div class="bucket-dot add"></div><div class="bucket-label">Add bucket</div><span class="plus-tiny">+</span>`;
+      list.appendChild(addRow);
+    }
   }
 
-  document.querySelectorAll(".cat").forEach(el => {
-    el.classList.toggle("active", el.dataset.cat === state.activeCategory);
-  });
   wireCategories();
 }
 
 function wireCategories() {
   document.querySelectorAll(".cat").forEach(el => {
+    const clientName = el.dataset.client;
+    if (!clientName) return;
     el.onclick = e => {
       if (e.target.closest(".del")) return;
-      selectCategory(el.dataset.cat);
+      // Click on the chevron = just toggle expand. Click anywhere else = also set active.
+      const chevClick = e.target.closest(".chev");
+      if (state.expanded.has(clientName)) {
+        if (chevClick) {
+          state.expanded.delete(clientName);
+        } else {
+          // already active? collapse. Otherwise select.
+          if (state.activeClient === clientName && state.activeBucket === null) {
+            state.expanded.delete(clientName);
+          }
+          selectClient(clientName, null);
+          return;
+        }
+      } else {
+        state.expanded.add(clientName);
+        selectClient(clientName, null);
+        return;
+      }
+      renderSidebar();
+      render();
     };
-    el.ondragover = ev => {
-      if (!state.draggingFinalName) return;
-      ev.preventDefault();
-      el.classList.add("dragover");
-    };
+    el.ondragover = ev => { if (state.draggingFinalName) { ev.preventDefault(); el.classList.add("dragover"); } };
     el.ondragleave = () => el.classList.remove("dragover");
     el.ondrop = async ev => {
       ev.preventDefault();
       el.classList.remove("dragover");
       const final_name = state.draggingFinalName;
-      if (!final_name || el.dataset.cat === "__dup__" || el.dataset.cat === "__all__") return;
+      if (!final_name) return;
       try {
         await fetch("/sorter/move", {
           method: "POST", headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({final_name, client: el.dataset.cat})
+          body: JSON.stringify({final_name, client: clientName})
         });
-        toast(`Moved to <b>${esc(el.dataset.cat)}</b>`, "ok");
+        toast(`Moved to <b>${esc(clientName)}</b>`, "ok");
         await loadFiles();
       } catch { toast("Move failed", "er"); }
     };
     const delBtn = el.querySelector(".del");
     if (delBtn) delBtn.onclick = async ev => {
       ev.stopPropagation();
-      if (!confirm(`Remove the empty "${el.dataset.cat}" folder?`)) return;
+      if (!confirm(`Remove the empty "${clientName}" folder?`)) return;
       try {
         await fetch("/sorter/client/delete", {
           method: "POST", headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({name: el.dataset.cat})
+          body: JSON.stringify({name: clientName})
         });
-        if (state.activeCategory === el.dataset.cat) state.activeCategory = "__all__";
+        if (state.activeClient === clientName) { state.activeClient = null; state.activeBucket = null; }
+        state.expanded.delete(clientName);
         await loadFiles();
       } catch { toast("Couldn't remove folder", "er"); }
+    };
+  });
+
+  document.querySelectorAll(".bucket-row").forEach(el => {
+    const { client, bucket } = el.dataset;
+    el.onclick = e => {
+      if (e.target.closest(".del-bucket")) return;
+      selectClient(client, bucket);
+    };
+    el.ondragover = ev => { if (state.draggingFinalName) { ev.preventDefault(); el.classList.add("dragover"); } };
+    el.ondragleave = () => el.classList.remove("dragover");
+    el.ondrop = async ev => {
+      ev.preventDefault();
+      el.classList.remove("dragover");
+      const final_name = state.draggingFinalName;
+      if (!final_name) return;
+      try {
+        await Promise.all([
+          fetch("/sorter/move", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({final_name, client})
+          }),
+          fetch("/sorter/bucket/move", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({final_name, bucket})
+          }),
+        ]);
+        toast(`Moved to <b>${esc(client)}</b> · <b>${esc(bucket)}</b>`, "ok");
+        await loadFiles();
+      } catch { toast("Move failed", "er"); }
+    };
+    const delBtn = el.querySelector(".del-bucket");
+    if (delBtn) delBtn.onclick = async ev => {
+      ev.stopPropagation();
+      if (!confirm(`Remove the empty "${bucket}" bucket from ${client}?`)) return;
+      try {
+        const r = await fetch("/sorter/bucket/remove", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({client, bucket})
+        });
+        const d = await r.json();
+        if (!d.ok) { toast(d.error || "Couldn't remove", "er"); return; }
+        if (state.activeBucket === bucket) state.activeBucket = null;
+        await loadFiles();
+      } catch { toast("Couldn't remove bucket", "er"); }
+    };
+  });
+
+  document.querySelectorAll(".bucket-add-row").forEach(el => {
+    const { client } = el.dataset;
+    el.onclick = async () => {
+      const name = prompt(`New bucket name for ${client}:`);
+      if (!name) return;
+      try {
+        const r = await fetch("/sorter/bucket/add", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({client, bucket: name})
+        });
+        const d = await r.json();
+        if (!d.ok) { toast(d.error || "Invalid bucket name", "er"); return; }
+        await loadFiles();
+        toast(`Added bucket <b>${esc(d.bucket)}</b>`, "ok");
+      } catch { toast("Couldn't add bucket", "er"); }
     };
   });
 }
@@ -3090,14 +3620,18 @@ $("btn-new-client").onclick = async () => {
     const d = await r.json();
     if (!d.ok) { toast("Invalid client name", "er"); return; }
     await loadFiles();
-    selectCategory(d.name);
+    selectClient(d.name, null);
+    state.expanded.add(d.name);
+    renderSidebar();
     toast(`Created <b>${esc(d.name)}</b>`, "ok");
   } catch { toast("Couldn't create client", "er"); }
 };
 
-function selectCategory(cat) {
-  state.activeCategory = cat;
+function selectClient(client, bucket) {
+  state.activeClient = client;
+  state.activeBucket = bucket;
   state.previewing = null;
+  state.selectedCards.clear();
   renderSidebar();
   render();
 }
@@ -3106,16 +3640,15 @@ function selectCategory(cat) {
 // MAIN RENDER
 // ══════════════════════════════════════════════════════════════════
 function getVisibleFiles() {
-  let arr = state.files;
-  if (state.activeCategory === "__dup__") arr = arr.filter(f => f.is_duplicate);
-  else if (state.activeCategory === "__empty__") arr = [];
-  else arr = arr.filter(f => (f.client || "Unassigned") === state.activeCategory && !f.is_duplicate);
+  if (!state.activeClient) return [];
+  let arr = state.files.filter(f => (f.client || "Unassigned") === state.activeClient);
+  if (state.activeBucket) arr = arr.filter(f => (f.bucket || "Unfiled") === state.activeBucket);
   if (state.search) {
     const q = state.search.toLowerCase();
     arr = arr.filter(f =>
       (f.final_name||"").toLowerCase().includes(q) ||
       (f.original||"").toLowerCase().includes(q) ||
-      (f.client||"").toLowerCase().includes(q)
+      (f.bucket||"").toLowerCase().includes(q)
     );
   }
   return arr;
@@ -3123,16 +3656,18 @@ function getVisibleFiles() {
 
 function render() {
   const files = getVisibleFiles();
-  const title = state.activeCategory === "__dup__" ? "Duplicates"
-              : state.activeCategory === "__empty__" ? "No clients yet"
-              : state.activeCategory || "";
+  const title = state.activeClient
+    ? (state.activeBucket
+        ? `${state.activeClient} › ${state.activeBucket}`
+        : state.activeClient)
+    : "No clients yet";
   $("ctx-title").textContent = title;
   $("ctx-meta").textContent = `${files.length} file${files.length !== 1 ? "s" : ""}`;
 
   const body = $("body");
   if (state.previewing) { renderPreview(body); return; }
   if (!files.length) {
-    const isEmptyLib = state.activeCategory === "__empty__";
+    const isEmptyLib = !state.activeClient;
     body.innerHTML = `
       <div class="empty">
         <div class="big">${isEmptyLib ? "The library is quiet." : "This folder is bare."}</div>
@@ -3146,21 +3681,51 @@ function render() {
     return;
   }
 
-  body.innerHTML = `<div class="grid">${files.map(fileCard).join("")}</div>`;
+  // If we're at a client level (no specific bucket), group by bucket with section headers.
+  if (state.activeClient && !state.activeBucket) {
+    const byBucket = new Map();
+    for (const f of files) {
+      const b = f.bucket || "Unfiled";
+      if (!byBucket.has(b)) byBucket.set(b, []);
+      byBucket.get(b).push(f);
+    }
+    const order = [...bucketsFor(state.activeClient), ...[...byBucket.keys()].filter(b => !bucketsFor(state.activeClient).includes(b))];
+    const sections = [];
+    for (const b of order) {
+      const list = byBucket.get(b);
+      if (!list || !list.length) continue;
+      sections.push(`
+        <div class="section">
+          <div class="section-head">
+            <div class="section-label">${esc(b)}</div>
+            <div class="section-count">${list.length}</div>
+          </div>
+          <div class="grid">${list.map(fileCard).join("")}</div>
+        </div>`);
+    }
+    body.innerHTML = sections.join("");
+  } else {
+    body.innerHTML = `<div class="grid">${files.map(fileCard).join("")}</div>`;
+  }
   body.querySelectorAll(".card").forEach(el => wireCard(el));
 }
 
 function fileCard(f) {
   const echoes = f.echo_count || 0;
+  const bucket = f.bucket || "Unfiled";
   return `
-    <div class="card" data-name="${esc(f.final_name)}" draggable="true">
-      ${echoes > 0 ? `<div class="echo-chip" title="${echoes} echo${echoes !== 1 ? "es" : ""} — this file has been seen again"><span class="ripple"></span>${echoes}</div>` : ''}
+    <div class="card${state.selectedCards.has(f.final_name) ? " is-selected" : ""}" data-name="${esc(f.final_name)}" data-bucket="${esc(bucket)}" draggable="true">
+      ${echoes > 0 ? `<div class="echo-chip" title="${echoes} echo${echoes !== 1 ? "es" : ""}"><span class="ripple"></span>${echoes}</div>` : ""}
       <div class="fname">${esc(f.final_name)}</div>
       <div class="meta">
         <span>${fmtSize(f.size)}</span>
         <span class="sep">·</span>
         <span>${fmtAgo(f.applied_at)}</span>
       </div>
+      <button class="bucket-pill" data-role="bucket-pill" title="Click to change bucket">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+        <span>${esc(bucket)}</span>
+      </button>
     </div>`;
 }
 
@@ -3168,7 +3733,6 @@ function wireCard(el) {
   const name = el.dataset.name;
   const file = state.files.find(f => f.final_name === name);
   if (!file) return;
-  // Hover delay: only show the tooltip after sustained hover (2 s).
   let hoverTimer = null, lastEvt = null;
   el.onmouseenter = e => {
     lastEvt = e;
@@ -3184,7 +3748,25 @@ function wireCard(el) {
     hoverTimer = null;
     hideTip();
   };
-  el.onclick = () => { clearTimeout(hoverTimer); hideTip(); openPreview(file); };
+  el.onclick = e => {
+    clearTimeout(hoverTimer); hideTip();
+    // bucket pill click → open popover, don't open preview
+    if (e.target.closest("[data-role='bucket-pill']")) {
+      e.stopPropagation();
+      openBucketPopover(el, file);
+      return;
+    }
+    // Shift or Cmd/Ctrl click → multi-select instead of preview
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      if (state.selectedCards.has(name)) state.selectedCards.delete(name);
+      else state.selectedCards.add(name);
+      el.classList.toggle("is-selected");
+      updateBulkBar();
+      return;
+    }
+    openPreview(file);
+  };
   el.ondragstart = ev => {
     clearTimeout(hoverTimer); hideTip();
     state.draggingFinalName = name;
@@ -3194,6 +3776,149 @@ function wireCard(el) {
   el.ondragend = () => {
     state.draggingFinalName = null;
     el.classList.remove("dragging");
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BUCKET POPOVER (per-card quick reassign)
+// ══════════════════════════════════════════════════════════════════
+let _bucketPopoverEl = null;
+function closeBucketPopover() {
+  if (_bucketPopoverEl) { _bucketPopoverEl.remove(); _bucketPopoverEl = null; }
+  document.removeEventListener("click", _bucketPopoverOutside, true);
+  document.removeEventListener("keydown", _bucketPopoverKeydown);
+}
+function _bucketPopoverOutside(e) {
+  if (_bucketPopoverEl && !_bucketPopoverEl.contains(e.target)) closeBucketPopover();
+}
+function _bucketPopoverKeydown(e) {
+  if (e.key === "Escape") closeBucketPopover();
+}
+function openBucketPopover(cardEl, file) {
+  closeBucketPopover();
+  const client = file.client || "Unassigned";
+  const current = file.bucket || "Unfiled";
+  const buckets = [...new Set([...bucketsFor(client), "Unfiled"])];
+  const pop = document.createElement("div");
+  pop.className = "bucket-popover glass glass--elevated";
+  pop.innerHTML = `
+    <div class="bp-head">
+      <span class="bp-title">Move to</span>
+      <span class="bp-sub">${esc(client)}</span>
+    </div>
+    <div class="bp-options">
+      ${buckets.map(b => `<button class="bp-option${b === current ? " current" : ""}" data-b="${esc(b)}">${esc(b)}</button>`).join("")}
+      <button class="bp-option bp-new" data-b="__new__">+ New bucket…</button>
+    </div>`;
+  document.body.appendChild(pop);
+  _bucketPopoverEl = pop;
+  // Position above/below the pill
+  const r = cardEl.querySelector("[data-role='bucket-pill']").getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let x = r.left, y = r.top - ph - 6;
+  if (y < 8) y = r.bottom + 6;
+  if (x + pw > innerWidth - 8) x = innerWidth - pw - 8;
+  pop.style.left = x + "px"; pop.style.top = y + "px";
+
+  pop.querySelectorAll(".bp-option").forEach(btn => {
+    btn.onclick = async () => {
+      let target = btn.dataset.b;
+      if (target === "__new__") {
+        target = prompt(`New bucket for ${client}:`);
+        if (!target) { closeBucketPopover(); return; }
+      }
+      if (target === current) { closeBucketPopover(); return; }
+      closeBucketPopover();
+      await moveBucket(file.final_name, target, current, client);
+    };
+  });
+
+  setTimeout(() => {
+    document.addEventListener("click", _bucketPopoverOutside, true);
+    document.addEventListener("keydown", _bucketPopoverKeydown);
+  }, 0);
+}
+
+async function moveBucket(final_name, target, from, client) {
+  try {
+    const r = await fetch("/sorter/bucket/move", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({final_name, bucket: target})
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "failed");
+    await loadFiles();
+    toast(`Moved to <b>${esc(target)}</b>  ·  <a class="undo-link" data-fn="${esc(final_name)}" data-from="${esc(from)}" data-client="${esc(client)}" data-to="${esc(target)}">Undo</a>`, "ok", 6000);
+    wireUndoLink();
+  } catch { toast("Couldn't move bucket", "er"); }
+}
+
+function wireUndoLink() {
+  const link = toastEl.querySelector(".undo-link");
+  if (!link) return;
+  link.onclick = async e => {
+    e.preventDefault();
+    const { fn, from, client } = link.dataset;
+    toastEl.classList.remove("show");
+    try {
+      await fetch("/sorter/bucket/move", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({final_name: fn, bucket: from})
+      });
+      await loadFiles();
+      toast(`Reverted to <b>${esc(from)}</b>`, "ok");
+    } catch { toast("Undo failed", "er"); }
+  };
+}
+
+function updateBulkBar() {
+  let bar = $("bulk-bar");
+  const n = state.selectedCards.size;
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "bulk-bar";
+    bar.className = "bulk-bar glass glass--elevated";
+    document.body.appendChild(bar);
+  }
+  if (n === 0) { bar.classList.remove("show"); return; }
+  // Derive the union of possible buckets from the selected cards' clients
+  const clients = new Set();
+  for (const name of state.selectedCards) {
+    const f = state.files.find(x => x.final_name === name);
+    if (f?.client) clients.add(f.client);
+  }
+  const buckets = new Set();
+  for (const c of clients) bucketsFor(c).forEach(b => buckets.add(b));
+  buckets.add("Unfiled");
+  const bOptions = [...buckets].sort();
+  bar.innerHTML = `
+    <div class="bb-count"><b>${n}</b> selected</div>
+    <div class="bb-actions">
+      <div class="bb-label">Move to</div>
+      ${bOptions.map(b => `<button class="bb-bucket" data-b="${esc(b)}">${esc(b)}</button>`).join("")}
+      <button class="bb-clear">Clear</button>
+    </div>`;
+  bar.classList.add("show");
+  bar.querySelectorAll(".bb-bucket").forEach(btn => {
+    btn.onclick = async () => {
+      const target = btn.dataset.b;
+      const targets = [...state.selectedCards];
+      for (const fn of targets) {
+        await fetch("/sorter/bucket/move", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({final_name: fn, bucket: target})
+        });
+      }
+      state.selectedCards.clear();
+      await loadFiles();
+      toast(`Moved <b>${targets.length}</b> file${targets.length !== 1 ? "s" : ""} to <b>${esc(target)}</b>`, "ok");
+      updateBulkBar();
+    };
+  });
+  bar.querySelector(".bb-clear").onclick = () => {
+    state.selectedCards.clear();
+    document.querySelectorAll(".card.is-selected").forEach(c => c.classList.remove("is-selected"));
+    updateBulkBar();
   };
 }
 
@@ -3463,6 +4188,7 @@ function renderQueueRow(id) {
         <div class="bottom">
           <input class="name-input" data-role="name" placeholder="—" disabled />
           <input class="cat-input" data-role="client" placeholder="Client…" list="clients-datalist" disabled />
+          <input class="cat-input" data-role="bucket" placeholder="Bucket…" list="buckets-datalist" disabled />
         </div>
       </div>`;
     $("queue").appendChild(el);
@@ -3476,8 +4202,12 @@ function renderQueueRow(id) {
     el.querySelector('[data-role="name"]').oninput = e => r.final_name = e.target.value;
     el.querySelector('[data-role="client"]').oninput = e => {
       r.client = e.target.value;
-      r.clientLocked = true;   // user typed → their choice sticks through row_done
+      r.clientLocked = true;
       updateSummary();
+    };
+    el.querySelector('[data-role="bucket"]').oninput = e => {
+      r.bucket = e.target.value;
+      r.bucketLocked = true;
     };
     el.querySelector('[data-role="skip"]').onclick = () => {
       state.rows.delete(id); el.remove(); updateSummary();
@@ -3497,6 +4227,9 @@ function renderQueueRow(id) {
   const clientInput = qs('[data-role="client"]', el);
   clientInput.value = r.client || "";
   clientInput.disabled = !(r.status === "ready" || r.status === "duplicate");
+  const bucketInput = qs('[data-role="bucket"]', el);
+  bucketInput.value = r.bucket || "";
+  bucketInput.disabled = !(r.status === "ready" || r.status === "duplicate");
   el.classList.toggle("accepted", r.accepted && (r.status === "ready" || r.status === "duplicate"));
   el.classList.toggle("skipped", !r.accepted);
 }
@@ -3569,15 +4302,19 @@ function handleStreamEvent(ev, localIds, idMap, setIdx, getIdx) {
   } else if (ev.type === "row_done") {
     const r = state.rows.get(idMap[ev.id]);
     if (!r) return;
-    // Respect a user-supplied context client (from the active sidebar folder).
-    // Only accept Gemma's client guess if the user hadn't already implied one.
     const gemmaClient = ev.client || "";
     const newClient = r.clientLocked && r.client
       ? r.client
       : (gemmaClient && gemmaClient !== "Unassigned" ? gemmaClient : (r.client || ""));
+    const gemmaBucket = ev.bucket || "";
+    const newBucket = r.bucketLocked && r.bucket
+      ? r.bucket
+      : (gemmaBucket || (r.bucket || ""));
     Object.assign(r, {
       status: ev.status, suggested: ev.suggested, final_name: ev.suggested,
       client: newClient,
+      bucket: newBucket,
+      gemma_bucket: gemmaBucket,
       preview: ev.preview, dup_of: ev.dup_of, error: ev.error, temp_path: ev.temp_path,
     });
     const el = document.getElementById("row-" + idMap[ev.id]);
@@ -3596,8 +4333,8 @@ $("apply").onclick = async () => {
   for (const r of state.rows.values()) {
     if (!r.temp_path) continue;
     if (!r.accepted) { decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"skip"}); continue; }
-    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:r.client});
-    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:r.client});
+    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:r.client, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
+    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:r.client, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
   }
   if (!decisions.filter(d => d.status !== "skip").length) return;
   $("apply").disabled = true;
