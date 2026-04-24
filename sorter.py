@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 BASE = Path(__file__).parent
@@ -321,9 +321,10 @@ async def stream_ollama(prompt: str, *, max_tokens: int = 60, temp: float = 0.3)
                     return
 
 
-async def suggest_name_client_bucket(md_text: str, fallback: str, emit_token, known_clients: list[str], manifest: dict):
-    """Stream filename tokens via emit_token(tok), then infer client, then bucket.
-    Returns (suggested_name, client, bucket)."""
+async def suggest_name_and_bucket(md_text: str, fallback: str, emit_token, client: str, manifest: dict):
+    """Stream filename tokens, then infer ONE bucket from the given client's taxonomy.
+    Client is fixed at the batch level (the user picks it in the drawer).
+    Returns (suggested_name, bucket)."""
     prompt = NAME_PROMPT.format(md=_prep_for_llm(md_text))
     raw = ""
     try:
@@ -331,32 +332,21 @@ async def suggest_name_client_bucket(md_text: str, fallback: str, emit_token, kn
             raw += tok
             await emit_token(tok)
     except Exception:
-        return sanitize_snake(f"error_{Path(fallback).stem}", fallback), _CLIENT_FALLBACK, _BUCKET_FALLBACK
+        return sanitize_snake(f"error_{Path(fallback).stem}", fallback), _BUCKET_FALLBACK
 
     first_line = next((ln for ln in raw.splitlines() if ln.strip()), "")
     suggested = sanitize_snake(first_line, fallback)
 
-    # client inference — prefer existing clients to keep taxonomy consistent
-    try:
-        hint = ""
-        if known_clients:
-            listed = "\n".join(f"- {c}" for c in known_clients[:20])
-            hint = f"EXISTING CLIENTS (prefer one of these if it matches the document):\n{listed}\n"
-        c_prompt = CLIENT_PROMPT.format(md=_prep_for_llm(md_text, limit=1400), known_clients_hint=hint)
-        raw_c = ""
-        async for tok in stream_ollama(c_prompt, max_tokens=16, temp=0.2):
-            raw_c += tok
-        client = sanitize_client(raw_c)
-    except Exception:
-        client = _CLIENT_FALLBACK
-
-    # bucket inference — per-client taxonomy, defaults for new clients
     try:
         buckets = client_buckets(manifest, client) if client != _CLIENT_FALLBACK else list(DEFAULT_BUCKETS)
+        # Always include Unfiled as the "unsure" fallback — Gemma is explicitly
+        # told to pick it when it can't confidently classify.
+        if "Unfiled" not in buckets:
+            buckets = buckets + ["Unfiled"]
         bucket_list = "\n".join(f"- {b}" for b in buckets)
         b_prompt = BUCKET_PROMPT.format(
             md=_prep_for_llm(md_text, limit=1400),
-            client=client,
+            client=client or "this client",
             bucket_list=bucket_list,
         )
         raw_b = ""
@@ -366,12 +356,12 @@ async def suggest_name_client_bucket(md_text: str, fallback: str, emit_token, kn
     except Exception:
         bucket = _BUCKET_FALLBACK
 
-    return suggested, client, bucket
+    return suggested, bucket
 
 
 # ── routes ────────────────────────────────────────────────────────────
 @router.post("/process")
-async def process(files: list[UploadFile]):
+async def process(files: list[UploadFile], batch_client: str = Form("")):
     """Stream NDJSON: per-file `row_start`, `row_step`, `row_done` events."""
     uploads: list[dict] = []
     for uf in files:
@@ -472,29 +462,29 @@ async def process(files: list[UploadFile]):
             async def emit_token_q(tok: str, _uid=u["id"]):
                 await queue.put(emit({"type": "row_token", "id": _uid, "tok": tok}))
 
-            # load known clients once per request so Gemma can reuse them
-            known_clients = sorted({e.get("client", "") for e in manifest["files"]} | set(manifest.get("clients", [])))
-            known_clients = [c for c in known_clients if c and c != _CLIENT_FALLBACK]
+            # The batch client is the single authoritative client for every
+            # file in this process call. We still let Gemma predict a per-file
+            # bucket against that client's taxonomy.
+            bc = sanitize_client(batch_client) if batch_client else _CLIENT_FALLBACK
 
             async def worker():
                 try:
-                    result = await suggest_name_client_bucket(md_text, u["name"], emit_token_q, known_clients, manifest)
+                    result = await suggest_name_and_bucket(md_text, u["name"], emit_token_q, bc, manifest)
                     await queue.put(b"__RESULT__:" + json.dumps(result).encode())
                 except Exception:
-                    await queue.put(b"__RESULT__:" + json.dumps([sanitize_snake("", u["name"]), _CLIENT_FALLBACK, _BUCKET_FALLBACK]).encode())
+                    await queue.put(b"__RESULT__:" + json.dumps([sanitize_snake("", u["name"]), _BUCKET_FALLBACK]).encode())
                 finally:
                     await queue.put(None)
 
             task = asyncio.create_task(worker())
             suggested: str = ""
-            client: str = _CLIENT_FALLBACK
             bucket: str = _BUCKET_FALLBACK
             while True:
                 item = await queue.get()
                 if item is None:
                     break
                 if item.startswith(b"__RESULT__:"):
-                    suggested, client, bucket = json.loads(item[len(b"__RESULT__:"):])
+                    suggested, bucket = json.loads(item[len(b"__RESULT__:"):])
                     continue
                 yield item
             await task
@@ -504,7 +494,7 @@ async def process(files: list[UploadFile]):
                 "id": u["id"],
                 "status": "ready",
                 "suggested": suggested,
-                "client": client,
+                "client": bc,
                 "bucket": bucket,
                 "preview": md_text[:800],
                 "temp_path": u["path"],
@@ -2993,6 +2983,72 @@ input { font: inherit; color: inherit; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   BATCH CLIENT PICKER (top of the upload drawer)
+   ═══════════════════════════════════════════════════════════════════ */
+.batch-client-box {
+  padding: 14px 16px 16px;
+  border-radius: 14px;
+  background: var(--paper-soft);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  margin-bottom: 14px;
+}
+.bc-label {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--ink-faint); font-weight: 600; margin-bottom: 8px;
+}
+.bc-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.bc-input {
+  flex: 1; min-width: 0;
+  padding: 9px 12px; border-radius: 10px;
+  background: var(--paper-raised);
+  border: 1px solid rgba(28, 25, 23, 0.1);
+  font: 14px var(--font-body); color: var(--ink);
+  outline: none; transition: all 140ms ease; font-weight: 500;
+}
+.bc-input:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.bc-hint {
+  font-size: 11px; color: var(--ink-faint);
+  font-family: var(--font-display); font-style: italic; white-space: nowrap;
+}
+.bc-hint.warn { color: var(--danger); }
+.bc-hint.info { color: var(--accent); }
+
+.bc-tax {
+  margin-top: 10px;
+}
+.bc-tax:empty { margin-top: 0; }
+.bc-tax-label {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink-faint); font-weight: 500; margin-bottom: 6px;
+}
+.bc-tax-pills {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.bc-tax-pill {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px; border-radius: 999px;
+  font: 11.5px var(--font-body); font-weight: 500;
+  background: rgba(45, 95, 62, 0.06);
+  border: 1px solid rgba(45, 95, 62, 0.18);
+  color: var(--accent-deep); letter-spacing: 0.01em;
+}
+.bc-tax-add {
+  padding: 4px 10px; border-radius: 999px;
+  font: 11.5px var(--font-display); font-style: italic; font-weight: 400;
+  background: transparent; border: 1px dashed rgba(28, 25, 23, 0.18);
+  color: var(--ink-faint); cursor: pointer; transition: all 140ms ease;
+}
+.bc-tax-add:hover {
+  border-color: var(--accent); color: var(--accent-deep); background: var(--accent-wash);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    EXPANDABLE CLIENTS + NESTED BUCKETS
    ═══════════════════════════════════════════════════════════════════ */
 .cat { grid-template-columns: 14px 1fr auto auto; padding: 8px 12px 8px 10px; }
@@ -3264,6 +3320,14 @@ input { font: inherit; color: inherit; }
     <button class="close" id="btn-close-drawer">×</button>
   </div>
   <div class="drawer-body">
+    <div class="batch-client-box">
+      <div class="bc-label">Client for this batch</div>
+      <div class="bc-row">
+        <input id="batch-client" class="bc-input" placeholder="Pick or create a client…" list="clients-datalist" />
+        <span class="bc-hint" id="batch-client-hint">Required before triage</span>
+      </div>
+      <div class="bc-tax" id="batch-client-tax"></div>
+    </div>
     <div id="drop" class="drop">
       <div class="icon">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
@@ -3327,6 +3391,7 @@ const state = {
   previewing: null,
   rows: new Map(),           // upload queue
   selectedCards: new Set(),  // multi-select in content pane (final_names)
+  batchClient: "",           // the single client for the current deposit batch
 };
 
 // ══════════════════════════════════════════════════════════════════
@@ -4037,8 +4102,27 @@ function toast(html, kind="", ms=2800) {
 // DRAWER
 // ══════════════════════════════════════════════════════════════════
 const drawer = $("drawer"), scrim = $("scrim");
-function openDrawer() { drawer.classList.add("open"); scrim.classList.add("open"); }
+function openDrawer() {
+  drawer.classList.add("open"); scrim.classList.add("open");
+  // If nothing's been set and there's a sidebar-active client, use that as the default.
+  if (!state.batchClient && state.activeClient) {
+    state.batchClient = state.activeClient;
+    $("batch-client").value = state.batchClient;
+  }
+  renderBatchClientTaxonomy();
+  updateSummary();
+  setTimeout(() => { if (!state.batchClient) $("batch-client").focus(); }, 250);
+}
 function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("open"); }
+
+// Wire the batch client input (script runs at end of body, DOM is ready).
+const _bcInput = $("batch-client");
+if (_bcInput) {
+  _bcInput.addEventListener("input", e => {
+    state.batchClient = e.target.value.trim();
+    updateSummary();
+  });
+}
 $("btn-open-drawer").onclick = openDrawer;
 $("btn-close-drawer").onclick = closeDrawer;
 scrim.onclick = closeDrawer;
@@ -4139,36 +4223,62 @@ function addFiles(list) {
   }
 }
 
-function hasClient(r) {
-  const c = (r.client || "").trim();
-  return c && c.toLowerCase() !== "unassigned";
+function hasBatchClient() {
+  return !!(state.batchClient && state.batchClient.trim() && state.batchClient.trim().toLowerCase() !== "unassigned");
 }
 
 function updateSummary() {
   const arr = [...state.rows.values()];
   const acceptedRows = arr.filter(r => r.accepted && (r.status === "ready" || r.status === "duplicate"));
   const ready = acceptedRows.length;
-  const missingClient = acceptedRows.filter(r => !hasClient(r)).length;
   const total = arr.length;
+  const bc = hasBatchClient();
   let summary = `<b>${total}</b> queued  ·  <b>${ready}</b> ready to commit`;
-  if (missingClient > 0) summary += `  ·  <span style="color:var(--danger)">${missingClient} need${missingClient === 1 ? "s" : ""} a client</span>`;
+  if (!bc) summary += `  ·  <span style="color:var(--danger)">pick a client first</span>`;
   $("drawer-summary").innerHTML = summary;
-  $("apply").disabled = ready === 0 || missingClient > 0;
-  $("apply").title = missingClient > 0 ? `${missingClient} row${missingClient === 1 ? " is" : "s are"} missing a client name` : "";
-  $("process").disabled = !arr.some(r => r.status === "queued");
+  $("apply").disabled = ready === 0 || !bc;
+  $("apply").title = !bc ? "Pick a client at the top of the drawer first" : "";
+  $("process").disabled = !arr.some(r => r.status === "queued") || !bc;
+  $("process").title = !bc ? "Pick a client at the top of the drawer first" : "";
+  renderBatchClientTaxonomy();
+}
 
-  // add a visual warning marker on rows that still need a client
-  for (const r of acceptedRows) {
-    const el = document.getElementById("row-" + r.id);
-    if (el) el.classList.toggle("needs-client", !hasClient(r));
+function renderBatchClientTaxonomy() {
+  const box = $("batch-client-tax");
+  if (!box) return;
+  const hint = $("batch-client-hint");
+  const bc = state.batchClient;
+  if (!bc || !hasBatchClient()) {
+    box.innerHTML = "";
+    if (hint) { hint.textContent = "Required before triage"; hint.className = "bc-hint warn"; }
+    return;
   }
-  // and strip that marker from any rows that aren't accepted or no longer need
-  for (const r of arr) {
-    if (!r.accepted || hasClient(r)) {
-      const el = document.getElementById("row-" + r.id);
-      if (el) el.classList.remove("needs-client");
-    }
+  const known = allClients().includes(bc);
+  if (hint) {
+    hint.textContent = known ? "" : "New client — will be created on commit";
+    hint.className = "bc-hint" + (known ? "" : " info");
   }
+  const buckets = [...new Set([...bucketsFor(bc), "Unfiled"])];
+  box.innerHTML = `
+    <div class="bc-tax-label">Taxonomy</div>
+    <div class="bc-tax-pills">
+      ${buckets.map(b => `<span class="bc-tax-pill">${esc(b)}</span>`).join("")}
+      <button class="bc-tax-add" id="bc-tax-add">+ Add bucket</button>
+    </div>`;
+  $("bc-tax-add").onclick = async () => {
+    const name = prompt(`New bucket for ${bc}:`);
+    if (!name) return;
+    try {
+      const r = await fetch("/sorter/bucket/add", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({client: bc, bucket: name})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast(d.error || "Invalid bucket name", "er"); return; }
+      await loadFiles();
+      renderBatchClientTaxonomy();
+    } catch { toast("Couldn't add bucket", "er"); }
+  };
 }
 
 function renderQueueRow(id) {
@@ -4187,7 +4297,6 @@ function renderQueueRow(id) {
         </div>
         <div class="bottom">
           <input class="name-input" data-role="name" placeholder="—" disabled />
-          <input class="cat-input" data-role="client" placeholder="Client…" list="clients-datalist" disabled />
           <input class="cat-input" data-role="bucket" placeholder="Bucket…" list="buckets-datalist" disabled />
         </div>
       </div>`;
@@ -4200,11 +4309,6 @@ function renderQueueRow(id) {
       updateSummary();
     };
     el.querySelector('[data-role="name"]').oninput = e => r.final_name = e.target.value;
-    el.querySelector('[data-role="client"]').oninput = e => {
-      r.client = e.target.value;
-      r.clientLocked = true;
-      updateSummary();
-    };
     el.querySelector('[data-role="bucket"]').oninput = e => {
       r.bucket = e.target.value;
       r.bucketLocked = true;
@@ -4224,9 +4328,6 @@ function renderQueueRow(id) {
   const nameInput = qs('[data-role="name"]', el);
   nameInput.value = r.final_name || "";
   nameInput.disabled = !(r.status === "ready" || r.status === "duplicate" || r.status === "error" || r.status === "naming");
-  const clientInput = qs('[data-role="client"]', el);
-  clientInput.value = r.client || "";
-  clientInput.disabled = !(r.status === "ready" || r.status === "duplicate");
   const bucketInput = qs('[data-role="bucket"]', el);
   bucketInput.value = r.bucket || "";
   bucketInput.disabled = !(r.status === "ready" || r.status === "duplicate");
@@ -4241,11 +4342,13 @@ $("process").onclick = async () => {
   $("process").disabled = true;
 
   const fd = new FormData();
+  fd.append("batch_client", state.batchClient || "");
   const localIds = [];
   for (const r of queued) {
     fd.append("files", r.file, r.name);
     localIds.push(r.id);
     r.status = "hashing"; renderQueueRow(r.id);
+    r.client = state.batchClient;  // lock-in batch client for this row
   }
   updateSummary();
 
@@ -4333,8 +4436,8 @@ $("apply").onclick = async () => {
   for (const r of state.rows.values()) {
     if (!r.temp_path) continue;
     if (!r.accepted) { decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"skip"}); continue; }
-    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:r.client, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
-    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:r.client, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
+    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
+    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, preview:r.preview});
   }
   if (!decisions.filter(d => d.status !== "skip").length) return;
   $("apply").disabled = true;
