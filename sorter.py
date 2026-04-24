@@ -614,11 +614,12 @@ async def list_files():
             "echo_count": len(echoes),
             "is_duplicate": False,
         })
-    clients = sorted(set(manifest.get("clients", [])))
-    # Per-client taxonomy: each client gets their own bucket list (defaults seeded on first file).
-    taxonomies = {}
-    for c in clients:
-        taxonomies[c] = client_buckets(manifest, c)
+    # Pull clients from the registered list AND any that have a taxonomy
+    # seeded but weren't registered yet (e.g. user created buckets for a
+    # client via the drawer before committing any files).
+    all_clients = set(manifest.get("clients", [])) | set(manifest.get("client_taxonomies", {}).keys())
+    clients = sorted(all_clients)
+    taxonomies = {c: client_buckets(manifest, c) for c in clients}
     return JSONResponse({"files": out, "clients": clients, "client_taxonomies": taxonomies})
 
 
@@ -657,7 +658,9 @@ async def bucket_move(payload: dict):
 
 @router.post("/bucket/add")
 async def bucket_add(payload: dict):
-    """Add a new bucket to a client's taxonomy. payload = {client, bucket}"""
+    """Add a new bucket to a client's taxonomy. payload = {client, bucket}
+    Also registers the client if it didn't exist — so adding a bucket for a
+    brand-new client in the deposit drawer creates the client too."""
     client_name = sanitize_client(payload.get("client") or "")
     bucket = sanitize_bucket(payload.get("bucket") or "")
     if not client_name or client_name == _CLIENT_FALLBACK:
@@ -665,11 +668,16 @@ async def bucket_add(payload: dict):
     if not bucket or bucket == _BUCKET_FALLBACK:
         return JSONResponse({"ok": False, "error": "bucket required"}, status_code=400)
     manifest = _load_manifest()
+    manifest.setdefault("clients", [])
+    if client_name not in manifest["clients"]:
+        manifest["clients"].append(client_name)
     blist = ensure_client_taxonomy(manifest, client_name)
+    changed = False
     if bucket not in blist:
         blist.append(bucket)
-        _save_manifest(manifest)
-    return JSONResponse({"ok": True, "bucket": bucket, "taxonomy": blist})
+        changed = True
+    _save_manifest(manifest)
+    return JSONResponse({"ok": True, "bucket": bucket, "taxonomy": blist, "created_client": changed})
 
 
 @router.post("/bucket/remove")
