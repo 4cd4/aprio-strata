@@ -35,6 +35,8 @@ app.mount("/sorted", StaticFiles(directory=SORTED_DIR), name="sorted")
 app.mount("/fonts", StaticFiles(directory=FONTS_DIR), name="fonts")
 
 from sorter import router as sorter_router  # noqa: E402
+from mineru_runtime import mineru_api_base, run_mineru  # noqa: E402
+
 app.include_router(sorter_router)
 
 
@@ -65,52 +67,63 @@ async def parse(file: UploadFile, backend: str = Form("pipeline")):
             return (json.dumps(obj) + "\n").encode()
 
         yield emit({"type": "log", "msg": f"→ Saved {safe_name} ({in_path.stat().st_size:,} bytes)"})
-        yield emit({"type": "log", "msg": f"→ Launching mineru (backend={backend}) ..."})
-        yield emit({"type": "log", "msg": "(first run on a backend downloads ~1–3 GB of weights to ~/.cache/)"})
+        api = mineru_api_base()
+        if api:
+            yield emit({"type": "log", "msg": f"→ Calling mineru-api at {api} (backend={backend}) …"})
+            result = await run_mineru(in_path, job_out, backend=backend)
+            rc = int(result.get("exit_code") or 1)
+            if result.get("error"):
+                yield emit({"type": "log", "msg": f"✗ {result.get('error')}"})
+            err_file = job_out / "mineru_api_error.txt"
+            if err_file.is_file() and rc != 0:
+                yield emit({"type": "log", "msg": err_file.read_text(encoding="utf-8", errors="replace")[:4000]})
+        else:
+            yield emit({"type": "log", "msg": f"→ Launching mineru (backend={backend}) ..."})
+            yield emit({"type": "log", "msg": "(first run on a backend downloads ~1–3 GB of weights to ~/.cache/)"})
 
-        env = {
-            **os.environ,
-            "PYTHONUNBUFFERED": "1",
-            "TERM": "dumb",
-            "COLUMNS": "120",
-        }
-        proc = await asyncio.create_subprocess_exec(
-            "mineru",
-            "-p", str(in_path),
-            "-o", str(job_out),
-            "-b", backend,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
-        )
+            env = {
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+                "TERM": "dumb",
+                "COLUMNS": "120",
+            }
+            proc = await asyncio.create_subprocess_exec(
+                "mineru",
+                "-p", str(in_path),
+                "-o", str(job_out),
+                "-b", backend,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
 
-        assert proc.stdout is not None
-        pending = b""
-        try:
-            while True:
-                chunk = await proc.stdout.read(1024)
-                if not chunk:
-                    break
-                pending += chunk
-                # split on either \n or \r so tqdm progress lines stream live
+            assert proc.stdout is not None
+            pending = b""
+            try:
                 while True:
-                    nl = pending.find(b"\n")
-                    cr = pending.find(b"\r")
-                    cuts = [i for i in (nl, cr) if i >= 0]
-                    if not cuts:
+                    chunk = await proc.stdout.read(1024)
+                    if not chunk:
                         break
-                    idx = min(cuts)
-                    line, pending = pending[:idx], pending[idx + 1 :]
-                    text = line.decode("utf-8", errors="replace").strip()
-                    if text:
-                        yield emit({"type": "log", "msg": text})
-            if pending.strip():
-                yield emit({"type": "log", "msg": pending.decode("utf-8", errors="replace").strip()})
-            rc = await proc.wait()
-        except asyncio.CancelledError:
-            proc.kill()
-            await proc.wait()
-            raise
+                    pending += chunk
+                    # split on either \n or \r so tqdm progress lines stream live
+                    while True:
+                        nl = pending.find(b"\n")
+                        cr = pending.find(b"\r")
+                        cuts = [i for i in (nl, cr) if i >= 0]
+                        if not cuts:
+                            break
+                        idx = min(cuts)
+                        line, pending = pending[:idx], pending[idx + 1 :]
+                        text = line.decode("utf-8", errors="replace").strip()
+                        if text:
+                            yield emit({"type": "log", "msg": text})
+                if pending.strip():
+                    yield emit({"type": "log", "msg": pending.decode("utf-8", errors="replace").strip()})
+                rc = await proc.wait()
+            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+                raise
         md_path, cl_path = _find_outputs(job_out)
         markdown = md_path.read_text() if md_path else ""
         content_list = []

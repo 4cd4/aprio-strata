@@ -1,0 +1,10 @@
+azure-identity
+azure-storage-blob
+fastapi
+httpx
+mineru[core]
+openpyxl
+psycopg[binary]
+PyJWT[crypto]
+python-multipart
+uvicorn
