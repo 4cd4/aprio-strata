@@ -234,6 +234,16 @@ async def extract_financial_statements(
         final_name=final_name,
         client=client,
     )
+    exit_code = parsed["exit_code"]
+    parse_error = parsed.get("error")
+    if exit_code != 0:
+        # MinerU itself failed — don't pretend the doc had no tables. Status must
+        # distinguish "extraction errored" from "extracted fine but no statements".
+        status = "extraction_failed"
+    elif rows:
+        status = "pending_review"
+    else:
+        status = "no_financial_tables_found"
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "version": EXTRACTION_VERSION,
@@ -243,12 +253,13 @@ async def extract_financial_statements(
         "hash": file_hash,
         "client": client,
         "bucket": bucket,
-        "status": "pending_review" if rows else "no_financial_tables_found",
+        "status": status,
         "created_at": now,
         "updated_at": now,
         "source": {
-            "mineru_exit_code": parsed["exit_code"],
+            "mineru_exit_code": exit_code,
             "mineru_backend": b,
+            "mineru_error": parse_error,
             "markdown_path": parsed["markdown_path"],
             "content_list_path": parsed["content_list_path"],
             "content_list_items": len(content_list),

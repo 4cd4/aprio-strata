@@ -2335,7 +2335,7 @@ function showTip(e, f) {
     <div class="tip-sep"></div>
     <div class="tip-deep-row">
       <div class="tip-deep-btns">
-        <button type="button" class="tip-deep-btn" onclick="event.preventDefault(); event.stopPropagation(); deepExtract(this, this.dataset.fn);" data-fn="${esc(f.final_name)}" title="Run MinerU hybrid-auto-engine and produce a downloadable XLSX of canonical financial rows. Cached after the first run.">Deep extract</button>
+        <button type="button" class="tip-deep-btn" onclick="event.preventDefault(); event.stopPropagation(); deepExtract(this, this.dataset.fn, { force: event.shiftKey });" data-fn="${esc(f.final_name)}" title="Click: run (cached if previously extracted). Shift-click: force re-extract (bypasses cache).">Deep extract</button>
       </div>
       <div class="tip-deep-hint">Runs <code>hybrid-auto-engine</code> on this file and produces an XLSX of canonical financial rows. Cached by content hash — re-clicking is instant.</div>
     </div>` : ""}`;
@@ -2474,14 +2474,15 @@ function startDeepRow(finalName) {
 // One MinerU hybrid-auto-engine pass per file. Cached by content hash.
 // On done: row click -> XLSX download from the canonical-rows artifact.
 // ══════════════════════════════════════════════════════════════════
-async function deepExtract(triggerEl, finalName) {
+async function deepExtract(triggerEl, finalName, opts) {
   if (!finalName) return;
-  const row = startDeepRow(finalName);
+  const force = !!(opts && opts.force);
+  const row = startDeepRow(finalName + (force ? " (re-extract)" : ""));
   const ac = new AbortController();
   row.setAbortHandler(() => ac.abort());
   let receivedDone = false;
   try {
-    const url = "/sorter/deep-extract/" + encodeURIComponent(finalName);
+    const url = "/sorter/deep-extract/" + encodeURIComponent(finalName) + (force ? "?force=true" : "");
     const r = await fetch(url, { method: "POST", signal: ac.signal });
     if (!r.ok || !r.body) {
       const t = await (r.text ? r.text().catch(() => "") : Promise.resolve(""));

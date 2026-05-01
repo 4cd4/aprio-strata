@@ -1123,11 +1123,13 @@ async def deep_extract(request: Request, final_name: str):
     client_name = entry.get("client") or entry.get("client_name") or "Unassigned"
     bucket_name = entry.get("bucket") or entry.get("bucket_name") or "Unfiled"
 
+    force = (request.query_params.get("force") or "").lower() in ("1", "true", "yes")
+
     cached = (
         azure_store.get_financial_extraction(ctx, document_id) if ctx
         else read_local_artifact(SORTED, document_id)
     )
-    if cached and cached.get("hash") == file_hash:
+    if not force and cached and cached.get("hash") == file_hash:
         async def cached_stream():
             yield (json.dumps({
                 "type": "meta",
@@ -1236,11 +1238,23 @@ async def deep_extract(request: Request, final_name: str):
 
             elapsed = time.monotonic() - t0
             mineru_exit = (artifact.get("source") or {}).get("mineru_exit_code")
+            mineru_error = (artifact.get("source") or {}).get("mineru_error")
             if pages > 0 and mineru_exit == 0:
                 try:
                     record_completion(backend, elapsed_seconds=elapsed, pages=pages)
                 except Exception:
                     pass
+
+            if mineru_exit != 0:
+                # Surface the real error to the caller — don't silently save an
+                # empty artifact that looks like "doc had no tables".
+                yield _line({
+                    "type": "error",
+                    "error": mineru_error or f"mineru exit_code={mineru_exit}",
+                    "mineru_exit_code": mineru_exit,
+                    "elapsed": round(elapsed, 2),
+                })
+                return
 
             if ctx:
                 azure_store.save_financial_extraction(ctx, document_id, artifact)

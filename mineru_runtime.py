@@ -28,6 +28,21 @@ def mineru_api_timeout() -> float:
         return 600.0
 
 
+def mineru_server_url() -> str:
+    """OpenAI-compatible server URL (vLLM/SGLang/...) for the
+    ``vlm-http-client`` and ``hybrid-http-client`` backends.
+
+    Forwarded as the ``server_url`` form field on every ``/file_parse``
+    request when set. mineru-api ignores it for backends that don't use it,
+    so it's safe to attach unconditionally.
+
+    Resolved from ``mineru-api``'s host, NOT from this process — i.e.
+    ``http://127.0.0.1:30000`` means port 30000 on the same machine that runs
+    ``mineru-api``, not the laptop calling this client.
+    """
+    return (os.environ.get("MINERU_SERVER_URL") or "").strip()
+
+
 def _guess_content_type(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
@@ -102,16 +117,25 @@ async def _run_mineru_http(
     url = f"{base}/file_parse"
     data: dict[str, str] = {
         "return_md": "true",
-        "backend": backend,
         "parse_method": "auto",
         "formula_enable": "true",
         "table_enable": "true",
         "lang_list": (os.environ.get("MINERU_API_LANG_LIST") or "en").strip() or "en",
     }
+    # mineru-api's /file_parse currently crashes with "dict() got multiple values
+    # for keyword argument 'backend'" when this is set as a form field — the
+    # server pre-populates `backend` in its parse_kwargs and then merges form
+    # data on top, blowing up. So we omit it here and rely on the server's
+    # `--backend` launch flag to control routing. Set MINERU_DEEP_BACKEND on the
+    # mineru-api process (via `--backend <name>`), not on this client.
+    _ = backend  # kept in signature for future versions; intentionally unused
     if page_start is not None:
         data["start_page"] = str(page_start)
     if page_end is not None:
         data["end_page"] = str(page_end)
+    server_url = mineru_server_url()
+    if server_url:
+        data["server_url"] = server_url
 
     file_bytes = in_path.read_bytes()
     ct = _guess_content_type(in_path)
@@ -126,12 +150,22 @@ async def _run_mineru_http(
         err_path = out_dir / "mineru_api_error.txt"
         out_dir.mkdir(parents=True, exist_ok=True)
         err_path.write_text(f"HTTP {r.status_code}\n{detail}", encoding="utf-8")
+        # Print to stderr so the uvicorn terminal shows the body even after the
+        # work_dir gets cleaned up. Truncate to 600 chars to keep logs readable.
+        import sys as _sys
+        print(
+            f"[mineru-api ERROR] HTTP {r.status_code} {url}\n"
+            f"  request data keys: {sorted(data.keys())}\n"
+            f"  response body: {detail[:600]}",
+            file=_sys.stderr,
+            flush=True,
+        )
         return {
             "exit_code": 1,
             "markdown_path": None,
             "content_list_path": None,
             "output_dir": out_dir,
-            "error": f"mineru-api HTTP {r.status_code}",
+            "error": f"mineru-api HTTP {r.status_code}: {detail[:400]}",
         }
 
     ct = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -203,7 +237,15 @@ async def _run_mineru_subprocess(
         stderr=asyncio.subprocess.DEVNULL,
         env=env,
     )
-    rc = await proc.wait()
+    try:
+        rc = await proc.wait()
+    except asyncio.CancelledError:
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
     md = next(iter(sorted(out_dir.rglob("*.md"))), None)
     content_list = next(iter(sorted(out_dir.rglob("*_content_list*.json"))), None)
     return {"exit_code": rc, "markdown_path": md, "content_list_path": content_list, "output_dir": out_dir}
