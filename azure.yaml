@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: aprio-strata
+metadata:
+  template: aprio-strata@1.0.0
+
+services:
+  api:
+    project: .
+    language: python
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: .
+
+hooks:
+  postprovision:
+    shell: sh
+    continueOnError: false
+    interactive: true
+    run: |
+      set -eu
+      echo "==> Applying azure_schema.sql to ${AZURE_SQL_SERVER}/${AZURE_SQL_DATABASE}"
+      if ! command -v sqlcmd >/dev/null 2>&1; then
+        echo "sqlcmd not found on PATH. Install via:"
+        echo "  brew install sqlcmd  # macOS"
+        echo "  apt-get install -y mssql-tools18  # Debian/Ubuntu"
+        exit 1
+      fi
+      sqlcmd -S "${AZURE_SQL_SERVER}" -d "${AZURE_SQL_DATABASE}" -G -i azure_schema.sql

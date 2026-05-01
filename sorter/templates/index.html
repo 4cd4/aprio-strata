@@ -1,0 +1,2953 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aprio Strata</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   APRIO STRATA — Aprio palette (warm paper + forest green), paper-glass
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Local fonts — vendored from Google Fonts into /fonts/ (no CDN) */
+__FONT_FACES__
+
+:root {
+  /* APRIO palette — warm paper backgrounds */
+  --paper: #F4EFE6;
+  --paper-soft: #FBFAF5;
+  --paper-raised: #FFFFFF;
+  --paper-shade: #EBE4D7;
+  --paper-deep: #DCD4C3;
+
+  /* Ink — text levels */
+  --ink: #1C1917;
+  --ink-muted: #57534E;
+  --ink-faint: #9F9890;
+  --ink-whisper: #C4BDB1;
+
+  /* Rules */
+  --rule: #D6D3D1;
+  --rule-soft: #E7E3DC;
+  --rule-fine: #EAE5DB;
+
+  /* Mineral accents (straight from Aprio triage) */
+  --accent: #2D5F3E;            /* forest green */
+  --accent-dim: #4A7C59;
+  --accent-deep: #1F4A2E;
+  --accent-wash: rgba(45, 95, 62, 0.06);
+  --accent-soft: rgba(45, 95, 62, 0.14);
+
+  --gold: #B8833E;
+  --gold-dim: #C9A267;
+  --gold-wash: rgba(184, 131, 62, 0.08);
+
+  --danger: #9B3F2F;
+  --danger-wash: rgba(155, 63, 47, 0.05);
+
+  /* Glass tiers — subtle paper overlays with frosted edges */
+  --glass-1: rgba(255, 253, 248, 0.62);
+  --glass-2: rgba(255, 253, 248, 0.78);
+  --glass-3: rgba(255, 253, 248, 0.90);
+
+  /* Type families — Aprio stack: Fraunces / Instrument Sans / JetBrains Mono */
+  --font-display: "Fraunces", "Iowan Old Style", "Palatino", Georgia, serif;
+  --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Shadows — editorial soft, not drop-shadowy */
+  --shadow-lg: 0 24px 56px -18px rgba(28, 25, 23, 0.18), 0 4px 14px -4px rgba(28, 25, 23, 0.08);
+  --shadow-md: 0 8px 24px -8px rgba(28, 25, 23, 0.12), 0 2px 6px -2px rgba(28, 25, 23, 0.05);
+  --shadow-sm: 0 1px 3px rgba(28, 25, 23, 0.04), 0 1px 2px rgba(28, 25, 23, 0.06);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden;
+  background: var(--paper); color: var(--ink);
+  font: 14px/1.55 var(--font-body);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv01", "kern";
+}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+input { font: inherit; color: inherit; }
+
+/* ─── ambient paper backdrop ──────────────────────────────────────── */
+.backdrop {
+  position: fixed; inset: 0; z-index: -2;
+  background:
+    radial-gradient(at 15% 20%, rgba(184, 131, 62, 0.09) 0%, transparent 52%),
+    radial-gradient(at 85% 10%, rgba(45, 95, 62, 0.07) 0%, transparent 55%),
+    radial-gradient(at 75% 90%, rgba(184, 131, 62, 0.08) 0%, transparent 58%),
+    radial-gradient(at 15% 85%, rgba(45, 95, 62, 0.05) 0%, transparent 55%),
+    linear-gradient(180deg, #F8F3E8 0%, var(--paper) 50%, #EEE7D6 100%);
+}
+.aurora {
+  position: fixed; inset: -15%; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 40% at 50% 0%, rgba(45, 95, 62, 0.09) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 80% 70%, rgba(184, 131, 62, 0.10) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 30% at 20% 90%, rgba(45, 95, 62, 0.07) 0%, transparent 55%);
+  filter: blur(70px);
+  animation: drift 32s ease-in-out infinite alternate;
+  opacity: 0.85;
+}
+@keyframes drift {
+  0%   { transform: translate(0, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate(-3%, 2%) rotate(3deg) scale(1.04); }
+  100% { transform: translate(2%, -2%) rotate(-2deg) scale(0.98); }
+}
+.strata {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(0deg, transparent calc(17% - 1px), rgba(28, 25, 23, 0.04) 17%, transparent calc(17% + 1px)),
+    linear-gradient(0deg, transparent calc(38% - 1px), rgba(28, 25, 23, 0.03) 38%, transparent calc(38% + 1px)),
+    linear-gradient(0deg, transparent calc(62% - 1px), rgba(28, 25, 23, 0.04) 62%, transparent calc(62% + 1px)),
+    linear-gradient(0deg, transparent calc(81% - 1px), rgba(28, 25, 23, 0.025) 81%, transparent calc(81% + 1px));
+}
+
+/* ─── frosted-paper glass primitive ───────────────────────────────── */
+.glass {
+  background: linear-gradient(135deg, var(--glass-1) 0%, rgba(251, 250, 245, 0.5) 100%);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(28, 25, 23, 0.04),
+    var(--shadow-lg);
+  border-radius: 22px;
+  position: relative;
+  isolation: isolate;
+}
+.glass::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: inherit;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.5'/></svg>");
+  opacity: 0.025; mix-blend-mode: multiply;
+  pointer-events: none; z-index: 0;
+}
+.glass > * { position: relative; z-index: 1; }
+.glass--elevated {
+  background: linear-gradient(135deg, var(--glass-3) 0%, rgba(255, 253, 248, 0.75) 100%);
+  backdrop-filter: blur(36px) saturate(160%);
+  -webkit-backdrop-filter: blur(36px) saturate(160%);
+}
+.glass--inner {
+  background: rgba(251, 250, 245, 0.55);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   LAYOUT
+   ═══════════════════════════════════════════════════════════════════ */
+.shell {
+  position: fixed; inset: 14px;
+  display: grid; grid-template-columns: 272px 1fr;
+  overflow: hidden;
+  animation: rise 600ms cubic-bezier(.2,.9,.2,1) both;
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.995); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ─── SIDEBAR ─────────────────────────────────────────────────────── */
+.sidebar {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 20px 16px;
+  border-right: 1px solid rgba(28, 25, 23, 0.08);
+  overflow: hidden; min-height: 0;
+}
+.brand {
+  padding: 2px 10px 18px;
+}
+.brand .mark {
+  display: flex; align-items: center; gap: 12px;
+}
+.brand .strata-mark {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.brand .wordmark {
+  display: flex; flex-direction: column;
+  line-height: 1.05;
+}
+.brand .wordmark .w1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 19px;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+.brand .wordmark .w2 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 19px;
+  letter-spacing: -0.005em;
+  color: var(--ink-muted);
+}
+
+.side-section {
+  margin-top: 12px; opacity: 0; animation: fade-slide 500ms cubic-bezier(.2,.9,.2,1) forwards;
+}
+.side-section:nth-child(3) { animation-delay: 80ms; }
+.side-section:nth-child(4) { animation-delay: 160ms; }
+@keyframes fade-slide {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.side-label {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--ink-faint); padding: 0 10px 8px;
+  font-weight: 500;
+}
+.side-label-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-right: 6px;
+}
+.side-label-row .side-label { padding: 0 10px 8px; flex: 1; }
+.side-add {
+  width: 22px; height: 22px; border-radius: 6px;
+  display: grid; place-items: center;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.1);
+  color: var(--ink-muted); font-size: 13px; line-height: 1; font-weight: 600;
+  transition: all 140ms ease; margin-bottom: 6px;
+}
+.side-add:hover { color: var(--accent-deep); background: var(--accent-wash); border-color: var(--accent-soft); }
+.cat .del {
+  opacity: 0; width: 18px; height: 18px; border-radius: 4px; line-height: 1;
+  color: var(--ink-faint); font-size: 11px; transition: all 140ms ease;
+  display: grid; place-items: center; margin-left: 4px;
+}
+.cat:hover .del { opacity: 1; }
+.cat .del:hover { color: var(--danger); background: var(--danger-wash); }
+
+.cat-list { display: flex; flex-direction: column; gap: 1px; overflow: auto; min-height: 0; }
+.cat {
+  position: relative;
+  display: grid; grid-template-columns: 22px 1fr auto;
+  align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px;
+  color: var(--ink-muted); font-size: 13px;
+  cursor: pointer; transition: all 160ms ease;
+  border: 1px solid transparent;
+}
+.cat:hover { background: rgba(28, 25, 23, 0.03); color: var(--ink); }
+.cat.active {
+  background: var(--accent-wash);
+  color: var(--accent-deep);
+  border-color: var(--accent-soft);
+  font-weight: 500;
+}
+.cat.active::before {
+  content: ""; position: absolute; left: -1px; top: 10%; bottom: 10%; width: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.cat .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; opacity: 0.4;
+  justify-self: center;
+}
+.cat.active .dot { opacity: 1; background: var(--accent); }
+.cat.is-quarantine.active .dot { background: var(--danger); }
+.cat.is-quarantine.active { background: var(--danger-wash); border-color: rgba(155, 63, 47, 0.18); color: var(--danger); }
+.cat.is-quarantine.active::before { background: var(--danger); }
+.cat .count {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-faint); padding: 2px 7px; border-radius: 999px;
+  background: rgba(28, 25, 23, 0.04); font-weight: 500;
+}
+.cat.active .count { color: var(--accent-deep); background: var(--accent-soft); }
+.cat.is-quarantine.active .count { color: var(--danger); background: rgba(155, 63, 47, 0.12); }
+
+.cat.dragover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-deep); }
+
+.side-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
+.btn-deposit {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 11px 14px; border-radius: 10px;
+  background: var(--accent);
+  color: var(--paper-soft); font-family: var(--font-body); font-weight: 600; font-size: 13px;
+  border: 1px solid var(--accent-deep);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 4px 14px -4px rgba(45, 95, 62, 0.4);
+  transition: all 180ms cubic-bezier(.2,.9,.2,1);
+  letter-spacing: 0.005em;
+}
+.btn-deposit:hover { transform: translateY(-1px); background: var(--accent-deep); box-shadow: 0 6px 18px -4px rgba(45, 95, 62, 0.5); }
+.btn-deposit:active { transform: translateY(0); }
+.btn-deposit .plus {
+  width: 18px; height: 18px; border-radius: 5px;
+  background: rgba(255,255,255,0.18); display: grid; place-items: center;
+  font-size: 13px; font-weight: 700; font-family: var(--font-body);
+}
+
+/* ─── CONTENT PANE ────────────────────────────────────────────────── */
+.content {
+  display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 0 22px 22px 0;
+}
+.toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.07);
+  min-height: 60px;
+}
+.breadcrumb {
+  display: flex; align-items: baseline; gap: 12px; min-width: 0;
+}
+.breadcrumb .ctx {
+  font-family: var(--font-display); font-weight: 300;
+  font-size: 24px; letter-spacing: -0.015em; color: var(--ink);
+}
+.breadcrumb .meta {
+  font-size: 11.5px; color: var(--ink-faint);
+  font-family: var(--font-mono); letter-spacing: 0.02em;
+}
+.toolbar-spacer { flex: 1; }
+.search {
+  display: flex; align-items: center; gap: 8px; min-width: 200px;
+  padding: 7px 12px; border-radius: 10px;
+  background: var(--paper-soft);
+  border: 1px solid rgba(28, 25, 23, 0.1);
+  transition: all 160ms ease;
+}
+.search:focus-within { border-color: var(--accent); background: var(--paper-raised); box-shadow: 0 0 0 3px var(--accent-wash); }
+.search svg { opacity: 0.5; flex-shrink: 0; color: var(--ink-muted); }
+.search input { background: transparent; border: none; outline: none; width: 100%; font-size: 13px; color: var(--ink); }
+.search input::placeholder { color: var(--ink-faint); }
+
+/* ─── content body ────────────────────────────────────────────────── */
+.body { flex: 1; overflow: auto; padding: 24px 28px 40px; min-height: 0; }
+.body::-webkit-scrollbar { width: 8px; }
+.body::-webkit-scrollbar-thumb { background: rgba(28, 25, 23, 0.1); border-radius: 4px; }
+.body::-webkit-scrollbar-track { background: transparent; }
+
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+/* ─── FILE CARD ───────────────────────────────────────────────────── */
+.card {
+  position: relative;
+  padding: 14px 16px; border-radius: 12px;
+  background: var(--paper-soft);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  display: flex; flex-direction: column; gap: 10px;
+  min-height: 108px; cursor: pointer;
+  transition: all 220ms cubic-bezier(.2,.9,.2,1);
+  animation: card-in 400ms cubic-bezier(.2,.9,.2,1) both;
+  box-shadow: var(--shadow-sm);
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.card:hover {
+  background: var(--paper-raised);
+  border-color: var(--accent-soft);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.card.is-dup { border-left: 2px solid var(--danger); }
+.card.is-dup:hover { border-left-color: var(--danger); box-shadow: var(--shadow-md), 0 0 0 1px rgba(155, 63, 47, 0.1); }
+.card.dragging { opacity: 0.4; transform: rotate(-2deg) scale(1.02); }
+.card.selected {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-wash);
+}
+.card .fname {
+  font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;
+  color: var(--ink); line-height: 1.45; word-break: break-all;
+  letter-spacing: 0.01em;
+}
+.card .meta {
+  margin-top: auto; display: flex; align-items: center; gap: 10px;
+  font-size: 11px; color: var(--ink-faint);
+  font-family: var(--font-mono); letter-spacing: 0.02em;
+}
+.card .meta .sep { opacity: 0.5; }
+.card .chip {
+  position: absolute; top: 10px; right: 10px;
+  font-family: var(--font-body); font-size: 10px; font-weight: 500;
+  padding: 2.5px 8px; border-radius: 999px;
+  background: var(--danger-wash); color: var(--danger);
+  border: 1px solid rgba(155, 63, 47, 0.2);
+  text-transform: lowercase; letter-spacing: 0.02em;
+}
+.card .echo-chip {
+  position: absolute; top: 10px; right: 10px;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  padding: 2.5px 7px; border-radius: 999px;
+  background: var(--gold-wash); color: var(--gold);
+  border: 1px solid rgba(184, 131, 62, 0.22);
+  letter-spacing: 0.02em;
+}
+.card .echo-chip .ripple {
+  width: 8px; height: 8px; display: inline-block; position: relative;
+}
+.card .echo-chip .ripple::before,
+.card .echo-chip .ripple::after {
+  content: ""; position: absolute; inset: 0;
+  border: 1px solid currentColor; border-radius: 50%;
+  opacity: 0.7;
+}
+.card .echo-chip .ripple::after {
+  inset: 2px; opacity: 1;
+}
+
+/* Flash gold ring on a card that just received a new echo from an apply batch */
+.card.just-echoed {
+  animation: echo-flash 2.4s cubic-bezier(.2,.8,.2,1) 1;
+}
+@keyframes echo-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(184, 131, 62, 0.55), var(--shadow-sm); }
+  15%  { box-shadow: 0 0 0 6px rgba(184, 131, 62, 0.35), 0 10px 30px -10px rgba(184, 131, 62, 0.35); }
+  55%  { box-shadow: 0 0 0 3px rgba(184, 131, 62, 0.18), var(--shadow-md); }
+  100% { box-shadow: 0 0 0 0 rgba(184, 131, 62, 0), var(--shadow-sm); }
+}
+
+/* ─── PREVIEW MODE ────────────────────────────────────────────────── */
+.preview-wrap { display: grid; grid-template-columns: 1fr 300px; gap: 14px; height: 100%; }
+.preview-frame {
+  border-radius: 14px; overflow: hidden; background: var(--paper-shade);
+  border: 1px solid rgba(28, 25, 23, 0.08); position: relative;
+  box-shadow: var(--shadow-sm);
+}
+.preview-frame iframe { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+.preview-meta { padding: 18px; overflow: auto; }
+.preview-meta h3 {
+  margin: 0 0 14px; font-family: var(--font-display); font-weight: 400;
+  font-size: 17px; letter-spacing: -0.01em; color: var(--ink);
+}
+.meta-row {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 0; border-bottom: 1px dashed rgba(28, 25, 23, 0.08);
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-row .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-faint); font-family: var(--font-mono); font-weight: 500; }
+.meta-row .v { font-size: 13px; color: var(--ink); word-break: break-word; font-family: var(--font-mono); line-height: 1.5; }
+.meta-row .v.body { font-family: var(--font-body); }
+
+.meta-section-head {
+  margin: 18px 0 8px; font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-faint); font-weight: 600;
+}
+.meta-section-head em {
+  font-style: normal; color: var(--gold); font-weight: 700;
+}
+.preview-echoes { display: flex; flex-direction: column; gap: 6px; }
+.preview-echo {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  padding: 6px 10px; border-radius: 8px;
+  background: var(--gold-wash); border: 1px solid rgba(184, 131, 62, 0.2);
+}
+.preview-echo-name {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink);
+  min-width: 0; word-break: break-all;
+}
+.preview-echo-when {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--gold);
+  font-style: italic; white-space: nowrap;
+}
+
+.preview-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.pa-btn {
+  display: flex; align-items: center; gap: 8px; justify-content: flex-start;
+  padding: 9px 12px; border-radius: 10px;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.1);
+  color: var(--ink-muted); font-size: 13px; transition: all 140ms ease;
+  font-family: var(--font-body);
+}
+.pa-btn:hover { background: var(--paper-raised); color: var(--ink); border-color: var(--accent); }
+.pa-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ─── EMPTY STATES ────────────────────────────────────────────────── */
+.empty {
+  padding: 72px 24px; text-align: center; color: var(--ink-faint);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.empty .big {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 24px; color: var(--ink-muted); letter-spacing: -0.01em;
+  font-weight: 300;
+}
+.empty .small { font-size: 13.5px; max-width: 360px; color: var(--ink-faint); }
+.empty .ghost-btn {
+  margin-top: 10px; padding: 9px 16px; border-radius: 10px;
+  background: var(--accent-wash); color: var(--accent);
+  border: 1px solid var(--accent-soft); font-size: 13px; font-weight: 600;
+  font-family: var(--font-body);
+}
+.empty .ghost-btn:hover { background: var(--accent-soft); color: var(--accent-deep); }
+.local-note {
+  margin-top: 28px; display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-display); font-style: italic; font-size: 12.5px;
+  color: var(--ink-faint); padding: 6px 12px; border-radius: 999px;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.06);
+}
+.local-note svg { color: var(--accent); opacity: 0.7; }
+.side-local {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 2px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+  color: var(--ink-faint); opacity: 0.85;
+}
+.side-local svg { color: var(--accent); opacity: 0.7; flex-shrink: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   UPLOAD DRAWER
+   ═══════════════════════════════════════════════════════════════════ */
+.drawer-scrim {
+  position: fixed; inset: 0; background: rgba(28, 25, 23, 0.18);
+  backdrop-filter: blur(4px); z-index: 40;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease;
+}
+.drawer-scrim.open { opacity: 1; pointer-events: auto; }
+
+.drawer {
+  position: fixed; top: 14px; bottom: 14px; right: 14px; width: min(560px, 55vw);
+  z-index: 50; display: flex; flex-direction: column;
+  transform: translateX(120%); transition: transform 360ms cubic-bezier(.2,.9,.2,1);
+  border-radius: 22px; overflow: hidden;
+}
+.drawer.open { transform: translateX(0); }
+.drawer-head { padding: 22px 24px 14px; border-bottom: 1px solid rgba(28, 25, 23, 0.08); }
+.drawer-head .t {
+  font-family: var(--font-display); font-weight: 300;
+  font-size: 24px; letter-spacing: -0.015em; color: var(--ink);
+}
+.drawer-head .s {
+  font-size: 13.5px; color: var(--ink-muted); margin-top: 2px;
+  font-family: var(--font-display); font-style: italic;
+  font-weight: 400;
+}
+.drawer-head .close {
+  position: absolute; top: 18px; right: 18px;
+  width: 30px; height: 30px; border-radius: 8px;
+  display: grid; place-items: center; color: var(--ink-muted);
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.1);
+}
+.drawer-head .close:hover { color: var(--ink); background: var(--paper-raised); }
+
+.drawer-body { flex: 1; overflow: auto; padding: 20px 24px; min-height: 0; }
+
+.drop {
+  position: relative; border: 2px dashed rgba(28, 25, 23, 0.18);
+  border-radius: 14px; padding: 32px 20px; text-align: center;
+  cursor: pointer; transition: all 220ms ease;
+  background: var(--paper-soft);
+}
+.drop:hover, .drop.hover {
+  border-color: var(--accent); background: var(--accent-wash);
+}
+.drop.compact { padding: 14px 18px; text-align: left; display: flex; align-items: center; gap: 14px; }
+.drop .icon {
+  width: 44px; height: 44px; border-radius: 12px;
+  margin: 0 auto 10px;
+  background: linear-gradient(135deg, var(--accent-wash), var(--gold-wash));
+  border: 1px solid var(--accent-soft);
+  display: grid; place-items: center; color: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+}
+.drop.compact .icon { margin: 0; width: 36px; height: 36px; }
+.drop strong { display: block; font-size: 14px; font-weight: 600; color: var(--ink); }
+.drop .hint { font-size: 12px; color: var(--ink-faint); margin-top: 2px; }
+.drop .or { display: inline-flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 11px; color: var(--ink-faint); font-style: italic; font-family: var(--font-display); }
+.drop .or:before, .drop .or:after { content: ""; display: block; width: 24px; height: 1px; background: rgba(28, 25, 23, 0.12); }
+.pick-folder {
+  margin-top: 8px; display: inline-flex; gap: 6px; align-items: center;
+  padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 500;
+  background: var(--paper-raised); color: var(--ink-muted);
+  border: 1px solid rgba(28, 25, 23, 0.1); cursor: pointer;
+}
+.pick-folder:hover { color: var(--accent-deep); background: var(--accent-wash); border-color: var(--accent-soft); }
+
+/* queue */
+.queue { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.qrow {
+  display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center;
+  padding: 14px; border-radius: 12px;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.08);
+  animation: card-in 300ms ease both;
+}
+.qrow.accepted { border-color: var(--accent-soft); background: var(--accent-wash); }
+.qrow.skipped { opacity: 0.4; }
+.qrow .check {
+  width: 18px; height: 18px; border-radius: 5px;
+  border: 1.5px solid rgba(28, 25, 23, 0.2); display: grid; place-items: center;
+  cursor: pointer; transition: all 140ms; background: var(--paper-raised);
+}
+.qrow .check.on { background: var(--accent); border-color: var(--accent); }
+.qrow .check.on::after { content: "✓"; color: var(--paper-soft); font-size: 11px; font-weight: 700; font-family: var(--font-body); }
+.qrow .main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.qrow .top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.qrow .ofn {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  color: var(--ink); min-width: 0; flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.qrow .stat {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px; letter-spacing: 0.04em;
+  background: rgba(28, 25, 23, 0.05); color: var(--ink-muted);
+  border: 1px solid rgba(28, 25, 23, 0.08); white-space: nowrap;
+}
+.qrow .stat.extracting, .qrow .stat.naming, .qrow .stat.hashing {
+  color: var(--gold); background: var(--gold-wash);
+  border-color: rgba(184, 131, 62, 0.25);
+}
+.qrow .stat.extracting::before, .qrow .stat.naming::before {
+  content: "●"; margin-right: 5px; animation: pulse 1.2s ease-in-out infinite;
+}
+.qrow .stat.ready { color: var(--accent); background: var(--accent-wash); border-color: var(--accent-soft); }
+.qrow .stat.duplicate { color: var(--danger); background: var(--danger-wash); border-color: rgba(155, 63, 47, 0.2); }
+.qrow .stat.error { color: var(--danger); background: var(--danger-wash); border-color: rgba(155, 63, 47, 0.2); }
+.qrow .stat.accepted { color: var(--accent); background: var(--accent-wash); border-color: var(--accent-soft); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.qrow .bottom { display: grid; grid-template-columns: 1fr 110px; gap: 10px; align-items: center; }
+.name-input {
+  background: var(--paper-raised);
+  border: 1px solid rgba(28, 25, 23, 0.1); border-radius: 8px;
+  padding: 7px 10px; font: 12.5px var(--font-mono); color: var(--ink);
+  outline: none; transition: all 140ms ease; letter-spacing: 0.01em;
+}
+.name-input:focus { border-color: var(--accent); background: var(--paper-raised); box-shadow: 0 0 0 3px var(--accent-wash); }
+.name-input.live { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+@keyframes caret { 0%,49%{opacity:1;} 50%,100%{opacity:0;} }
+
+.cat-input {
+  background: var(--paper-raised);
+  border: 1px solid rgba(28, 25, 23, 0.1); border-radius: 8px;
+  padding: 7px 10px; font: 11px var(--font-body); color: var(--ink-muted);
+  outline: none; text-align: center; font-weight: 500;
+}
+.cat-input:focus { border-color: var(--accent); color: var(--accent-deep); box-shadow: 0 0 0 3px var(--accent-wash); }
+.qrow.needs-client .cat-input {
+  border-color: var(--danger);
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+.qrow.needs-client .cat-input::placeholder { color: var(--danger); opacity: 0.7; }
+
+.qrow .skip {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--paper-raised); border: 1px solid rgba(28, 25, 23, 0.1);
+  color: var(--ink-faint); font-size: 14px; line-height: 1; display: grid; place-items: center;
+}
+.qrow .skip:hover { color: var(--danger); background: var(--danger-wash); border-color: rgba(155, 63, 47, 0.2); }
+
+.drawer-foot {
+  padding: 16px 24px; border-top: 1px solid rgba(28, 25, 23, 0.08);
+  display: flex; align-items: center; gap: 12px;
+}
+.drawer-foot .summary { flex: 1; font-size: 12px; color: var(--ink-faint); font-family: var(--font-mono); letter-spacing: 0.02em; }
+.drawer-foot .summary b { color: var(--ink); font-weight: 600; }
+.btn-ghost {
+  padding: 8px 14px; border-radius: 9px; font-size: 12.5px; font-weight: 500;
+  background: var(--paper-raised); border: 1px solid rgba(28, 25, 23, 0.1);
+  color: var(--ink-muted); font-family: var(--font-body);
+}
+.btn-ghost:hover { color: var(--ink); background: var(--paper-shade); border-color: rgba(28, 25, 23, 0.15); }
+.btn-primary {
+  padding: 9px 16px; border-radius: 10px; font-size: 12.5px; font-weight: 600;
+  background: var(--accent);
+  color: var(--paper-soft);
+  border: 1px solid var(--accent-deep);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 4px 14px -4px rgba(45, 95, 62, 0.4);
+  transition: all 180ms cubic-bezier(.2,.9,.2,1);
+  font-family: var(--font-body); letter-spacing: 0.005em;
+}
+.btn-primary:disabled { opacity: 0.35; filter: saturate(0.4); }
+.btn-primary:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent-deep); box-shadow: 0 6px 18px -4px rgba(45, 95, 62, 0.5); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   TOOLTIP & TOAST
+   ═══════════════════════════════════════════════════════════════════ */
+.tip {
+  position: fixed; pointer-events: auto;
+  min-width: 300px; max-width: 380px; overflow: hidden;
+  padding: 14px 16px; border-radius: 14px;
+  background: rgba(251, 250, 245, 0.96);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(28, 25, 23, 0.1);
+  box-shadow: var(--shadow-lg);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 200;
+}
+.tip.show { opacity: 1; transform: none; }
+.tip-hd {
+  font-family: var(--font-mono); font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--ink-faint); font-weight: 600; margin-bottom: 4px;
+}
+.tip-og {
+  font-family: var(--font-mono); font-size: 12.5px;
+  color: var(--ink); font-weight: 500;
+  line-height: 1.45; margin-bottom: 12px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tip-sep { height: 1px; background: rgba(28, 25, 23, 0.08); margin: 10px 0; }
+.tip-row { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; font-size: 11.5px; margin: 5px 0; min-width: 0; }
+.tip-row .k { color: var(--ink-faint); font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; font-size: 10px; font-weight: 500; flex-shrink: 0; }
+.tip-row .v {
+  color: var(--ink); font-family: var(--font-mono); text-align: right;
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.tip-echoes { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.tip-echo {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 4px 8px; border-radius: 6px;
+  background: var(--gold-wash); border: 1px solid rgba(184, 131, 62, 0.18);
+}
+.tip-echo-name {
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink);
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tip-echo-when {
+  font-family: var(--font-mono); font-size: 10px; color: var(--gold);
+  font-style: italic; white-space: nowrap;
+}
+.tip-echo-more {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11px; color: var(--ink-faint); text-align: center; padding-top: 2px;
+}
+
+.tip-deep-row { margin-top: 12px; }
+.tip-deep-btns {
+  display: flex;
+  gap: 6px;
+}
+.tip-deep-btn {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-soft);
+  background: var(--accent-wash);
+  color: var(--accent-deep);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.tip-deep-btn:hover { filter: brightness(0.97); }
+.tip-deep-hint {
+  font-size: 10px; color: var(--ink-faint); margin-top: 6px; line-height: 1.35;
+}
+
+.toast {
+  position: fixed; bottom: 28px; left: 50%; transform: translate(-50%, 20px);
+  padding: 12px 20px; border-radius: 14px;
+  background: rgba(28, 25, 23, 0.92);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-lg); font-size: 13.5px;
+  color: var(--paper-soft);
+  opacity: 0; z-index: 300; pointer-events: none;
+  transition: opacity 220ms cubic-bezier(.2,.9,.2,1), transform 220ms cubic-bezier(.2,.9,.2,1);
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--font-display); font-style: italic; font-weight: 400;
+  letter-spacing: 0.005em;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast b { font-family: var(--font-body); font-style: normal; font-weight: 600; }
+.toast .ok { color: #9FD4A8; font-style: normal; font-family: var(--font-body); font-weight: 600; }
+.toast .er { color: #E4A49A; font-style: normal; font-family: var(--font-body); font-weight: 600; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   DEEP EXTRACT — sidebar progress rows
+   ═══════════════════════════════════════════════════════════════════ */
+.side-deep .deep-list { display: flex; flex-direction: column; gap: 6px; }
+.deep-row {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 10px; border-radius: 10px;
+  background: var(--paper-soft);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+.deep-row.is-clickable { cursor: pointer; }
+.deep-row.is-clickable:hover {
+  background: var(--accent-wash);
+  border-color: var(--accent-soft);
+}
+.deep-row.is-error { background: var(--danger-wash); border-color: rgba(155, 63, 47, 0.2); }
+.deep-row .dr-top {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.deep-row .dr-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(45, 95, 62, 0.12);
+}
+.deep-row.is-running .dr-dot {
+  background: transparent;
+  border: 2px solid rgba(45, 95, 62, 0.2);
+  border-top-color: var(--accent);
+  box-shadow: none; width: 10px; height: 10px;
+  animation: dr-spin 900ms linear infinite;
+}
+.deep-row.is-done .dr-dot { background: var(--accent); }
+.deep-row.is-error .dr-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(155, 63, 47, 0.12); }
+.deep-row .dr-name {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink);
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.deep-row .dr-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--ink-faint); font-size: 13px; line-height: 1;
+  padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+}
+.deep-row .dr-close:hover { color: var(--ink); background: var(--paper-shade); }
+.deep-row .dr-stop {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(155, 63, 47, 0.35);
+  background: rgba(155, 63, 47, 0.07);
+  color: #8B3D2F;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+.deep-row .dr-stop:hover { background: rgba(155, 63, 47, 0.14); }
+.deep-row:not(.is-running) .dr-stop { display: none; }
+.deep-row.is-stopped .dr-fill {
+  background: rgba(28, 25, 23, 0.2);
+  width: 100% !important;
+}
+.deep-row.is-stopped .dr-dot { background: var(--ink-muted); animation: none; border: none; width: 8px; height: 8px; }
+.deep-row .dr-bar {
+  position: relative; height: 4px; border-radius: 999px;
+  background: rgba(28, 25, 23, 0.08); overflow: hidden;
+}
+.deep-row .dr-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--accent); border-radius: 999px;
+  width: 0%;
+  transition: width 600ms cubic-bezier(.2,.9,.2,1);
+}
+.deep-row.is-done .dr-fill { width: 100% !important; }
+.deep-row.is-error .dr-fill { background: var(--danger); width: 100% !important; }
+.deep-row .dr-meta {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint);
+  letter-spacing: 0.04em; font-variant-numeric: tabular-nums;
+}
+.deep-row .dr-meta b { color: var(--ink); font-weight: 600; }
+.deep-row .dr-meta .dr-mono { font-family: var(--font-mono); font-size: 10px; color: var(--ink-muted); }
+.deep-row .dr-meta .dr-warn { color: var(--danger); font-weight: 600; }
+.deep-row.is-error .dr-meta { color: var(--danger); }
+.deep-row.is-error .dr-meta b { color: var(--danger); }
+@keyframes dr-spin { to { transform: rotate(360deg); } }
+
+/* ═══════════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUT OVERLAY
+   ═══════════════════════════════════════════════════════════════════ */
+.shortcut-scrim {
+  position: fixed; inset: 0; background: rgba(28, 25, 23, 0.22);
+  backdrop-filter: blur(4px); z-index: 180;
+  opacity: 0; pointer-events: none; transition: opacity 180ms ease;
+}
+.shortcut-scrim.open { opacity: 1; pointer-events: auto; }
+.shortcut-overlay {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -48%); z-index: 200;
+  width: min(400px, 90vw); padding: 22px 24px;
+  border-radius: 18px; opacity: 0; pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.shortcut-overlay.open {
+  opacity: 1; transform: translate(-50%, -50%); pointer-events: auto;
+}
+.shortcut-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+}
+.shortcut-title {
+  font-family: var(--font-display); font-weight: 400; font-size: 20px;
+  letter-spacing: -0.01em; color: var(--ink);
+}
+.shortcut-close {
+  width: 26px; height: 26px; border-radius: 7px; font-size: 18px; line-height: 1;
+  color: var(--ink-faint); background: var(--paper-soft); border: 1px solid rgba(28,25,23,0.08);
+}
+.shortcut-close:hover { color: var(--ink); background: var(--paper-raised); }
+.shortcut-body { display: flex; flex-direction: column; gap: 8px; }
+.sk-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 2px; font-size: 13px; color: var(--ink-muted);
+}
+.sk-row span { margin-left: auto; color: var(--ink-muted); }
+.sk-row kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 6px;
+  background: var(--paper-soft); border: 1px solid rgba(28,25,23,0.1);
+  border-bottom-width: 2px; border-radius: 5px;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--ink); box-shadow: 0 1px 0 rgba(28,25,23,0.04);
+}
+.shortcut-foot {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid rgba(28, 25, 23, 0.08);
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11.5px; color: var(--ink-faint);
+}
+.shortcut-foot svg { color: var(--accent); opacity: 0.7; flex-shrink: 0; }
+
+.help-fab {
+  position: fixed; bottom: 24px; right: 24px; z-index: 30;
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--paper-raised); border: 1px solid rgba(28,25,23,0.1);
+  color: var(--ink-muted); font-weight: 600; font-size: 15px;
+  box-shadow: var(--shadow-sm); transition: all 140ms ease;
+}
+.help-fab:hover {
+  color: var(--accent-deep); background: var(--accent-wash);
+  border-color: var(--accent-soft); transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BATCH CLIENT PICKER (top of the upload drawer)
+   ═══════════════════════════════════════════════════════════════════ */
+.batch-client-box {
+  padding: 14px 16px 16px;
+  border-radius: 14px;
+  background: var(--paper-soft);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  margin-bottom: 14px;
+}
+.bc-label {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--ink-faint); font-weight: 600; margin-bottom: 8px;
+}
+.bc-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.bc-input {
+  flex: 1; min-width: 0;
+  padding: 9px 12px; border-radius: 10px;
+  background: var(--paper-raised);
+  border: 1px solid rgba(28, 25, 23, 0.1);
+  font: 14px var(--font-body); color: var(--ink);
+  outline: none; transition: all 140ms ease; font-weight: 500;
+}
+.bc-input:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.bc-hint {
+  font-size: 11px; color: var(--ink-faint);
+  font-family: var(--font-display); font-style: italic; white-space: nowrap;
+}
+.bc-hint.warn { color: var(--danger); }
+.bc-hint.info { color: var(--accent); }
+
+.bc-tax {
+  margin-top: 10px;
+}
+.bc-tax:empty { margin-top: 0; }
+.bc-tax-label {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink-faint); font-weight: 500; margin-bottom: 6px;
+}
+.bc-tax-pills {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.bc-tax-pill {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px; border-radius: 999px;
+  font: 11.5px var(--font-body); font-weight: 500;
+  background: rgba(45, 95, 62, 0.06);
+  border: 1px solid rgba(45, 95, 62, 0.18);
+  color: var(--accent-deep); letter-spacing: 0.01em;
+}
+.bc-tax-add {
+  padding: 4px 10px; border-radius: 999px;
+  font: 11.5px var(--font-display); font-style: italic; font-weight: 400;
+  background: transparent; border: 1px dashed rgba(28, 25, 23, 0.18);
+  color: var(--ink-faint); cursor: pointer; transition: all 140ms ease;
+}
+.bc-tax-add:hover {
+  border-color: var(--accent); color: var(--accent-deep); background: var(--accent-wash);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   EXPANDABLE CLIENTS + NESTED BUCKETS
+   ═══════════════════════════════════════════════════════════════════ */
+.cat { grid-template-columns: 14px 1fr auto auto; padding: 8px 12px 8px 10px; }
+.cat .chev {
+  display: grid; place-items: center; color: var(--ink-faint);
+  transition: transform 140ms ease; line-height: 0;
+}
+.cat .chev.open { transform: rotate(90deg); color: var(--accent); }
+.cat .cat-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat.active .cat-label { font-weight: 500; }
+
+.bucket-row {
+  display: grid; grid-template-columns: 24px 1fr auto auto;
+  align-items: center; gap: 8px; padding: 6px 10px 6px 26px;
+  color: var(--ink-faint); font-size: 12px; cursor: pointer;
+  border-radius: 8px; transition: all 140ms ease;
+  position: relative;
+}
+.bucket-row::before {
+  content: ""; position: absolute; left: 18px; top: -4px; bottom: 50%;
+  border-left: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom-left-radius: 6px; width: 8px;
+}
+.bucket-row:hover { background: rgba(28, 25, 23, 0.03); color: var(--ink); }
+.bucket-row.active {
+  background: var(--accent-wash); color: var(--accent-deep); font-weight: 500;
+}
+.bucket-row.active::before { border-color: var(--accent-soft); }
+.bucket-row.dragover { background: var(--accent-soft); color: var(--accent-deep); }
+.bucket-row .bucket-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; opacity: 0.5; justify-self: center;
+}
+.bucket-row.active .bucket-dot { opacity: 1; background: var(--accent); }
+.bucket-row .count {
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint);
+  padding: 1px 6px; border-radius: 999px; background: rgba(28, 25, 23, 0.04);
+}
+.bucket-row.active .count { color: var(--accent-deep); background: var(--accent-soft); }
+.bucket-row .del-bucket {
+  opacity: 0; color: var(--ink-faint); font-size: 11px; background: transparent; border: none;
+  width: 16px; height: 16px; border-radius: 3px; line-height: 1;
+  transition: all 140ms ease;
+}
+.bucket-row:hover .del-bucket { opacity: 1; }
+.bucket-row .del-bucket:hover { color: var(--danger); background: var(--danger-wash); }
+
+.bucket-add-row {
+  display: grid; grid-template-columns: 24px 1fr auto;
+  align-items: center; gap: 8px; padding: 6px 10px 6px 26px;
+  color: var(--ink-faint); font-size: 11.5px; cursor: pointer;
+  border-radius: 8px; transition: all 140ms ease;
+  font-family: var(--font-display); font-style: italic;
+  opacity: 0.65; position: relative;
+}
+.bucket-add-row::before {
+  content: ""; position: absolute; left: 18px; top: -4px; bottom: 50%;
+  border-left: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+  border-bottom-left-radius: 6px; width: 8px;
+}
+.bucket-add-row:hover { opacity: 1; color: var(--accent-deep); background: var(--accent-wash); }
+.bucket-add-row .bucket-dot.add {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; opacity: 0.5; justify-self: center;
+  border: 1px dashed currentColor; background: transparent;
+}
+.bucket-add-row .plus-tiny {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+  font-style: normal;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SECTION HEADERS (grouped-by-bucket)
+   ═══════════════════════════════════════════════════════════════════ */
+.section { margin-bottom: 28px; }
+.section:last-child { margin-bottom: 0; }
+.section-head {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid rgba(28, 25, 23, 0.06);
+}
+.section-label {
+  font-family: var(--font-display); font-weight: 400; font-size: 16px;
+  letter-spacing: -0.01em; color: var(--ink);
+}
+.section-count {
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--ink-faint); letter-spacing: 0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARD BUCKET PILL + SELECTED STATE
+   ═══════════════════════════════════════════════════════════════════ */
+.card { position: relative; padding-bottom: 38px; }
+.card .bucket-pill {
+  position: absolute; bottom: 10px; left: 14px; right: 14px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: 8px;
+  background: rgba(28, 25, 23, 0.04);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  color: var(--ink-muted); font-family: var(--font-body); font-size: 11px; font-weight: 500;
+  cursor: pointer; transition: all 140ms ease; justify-content: flex-start;
+}
+.card .bucket-pill svg { opacity: 0.55; flex-shrink: 0; }
+.card .bucket-pill:hover {
+  background: var(--accent-wash); border-color: var(--accent-soft); color: var(--accent-deep);
+}
+.card .bucket-pill:hover svg { opacity: 0.85; color: var(--accent); }
+.card.is-selected {
+  border-color: var(--accent); box-shadow: var(--shadow-md), 0 0 0 2px var(--accent-wash);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BUCKET POPOVER
+   ═══════════════════════════════════════════════════════════════════ */
+.bucket-popover {
+  position: fixed; z-index: 180;
+  width: 240px; padding: 10px;
+  border-radius: 12px;
+  animation: pop-in 140ms cubic-bezier(.2,.9,.2,1);
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.bp-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 8px 10px; border-bottom: 1px solid rgba(28, 25, 23, 0.08);
+}
+.bp-title {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint); font-weight: 600;
+}
+.bp-sub { font-size: 11.5px; color: var(--ink-muted); margin-left: auto; font-family: var(--font-mono); }
+.bp-options { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.bp-option {
+  display: flex; align-items: center; padding: 7px 10px; border-radius: 7px;
+  font-family: var(--font-body); font-size: 13px; color: var(--ink-muted); text-align: left;
+  background: transparent; border: none; transition: all 120ms ease;
+}
+.bp-option:hover { background: var(--accent-wash); color: var(--accent-deep); }
+.bp-option.current {
+  background: var(--accent-soft); color: var(--accent-deep); font-weight: 500;
+}
+.bp-option.current::after {
+  content: "✓"; margin-left: auto; opacity: 0.7;
+}
+.bp-option.bp-new {
+  font-style: italic; font-family: var(--font-display); color: var(--ink-faint);
+  margin-top: 4px; border-top: 1px dashed rgba(28, 25, 23, 0.06); padding-top: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BULK ACTION BAR
+   ═══════════════════════════════════════════════════════════════════ */
+.bulk-bar {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  z-index: 60; padding: 8px 10px;
+  border-radius: 14px; display: flex; align-items: center; gap: 12px;
+  transition: opacity 200ms cubic-bezier(.2,.9,.2,1), transform 200ms cubic-bezier(.2,.9,.2,1);
+}
+.bulk-bar.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.bb-count {
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-muted);
+  padding: 0 10px;
+}
+.bb-count b { color: var(--ink); font-weight: 600; }
+.bb-actions { display: flex; align-items: center; gap: 4px; }
+.bb-label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint); font-weight: 600; padding-right: 6px;
+}
+.bb-bucket {
+  padding: 6px 12px; border-radius: 8px; font-size: 12.5px; font-weight: 500;
+  background: var(--paper-soft); border: 1px solid rgba(28, 25, 23, 0.08);
+  color: var(--ink); transition: all 140ms ease; font-family: var(--font-body);
+}
+.bb-bucket:hover {
+  background: var(--accent-wash); border-color: var(--accent-soft); color: var(--accent-deep);
+}
+.bb-clear {
+  padding: 6px 10px; border-radius: 8px; font-size: 12px;
+  background: transparent; color: var(--ink-faint); border: 1px solid transparent;
+  margin-left: 4px;
+}
+.bb-clear:hover { color: var(--danger); background: var(--danger-wash); }
+
+.undo-link {
+  color: var(--accent); font-family: var(--font-body); font-style: normal;
+  font-weight: 600; text-decoration: underline; cursor: pointer;
+  margin-left: 4px; pointer-events: auto;
+}
+
+/* miscellaneous hidden inputs */
+.hidden { display: none !important; }
+
+.auth-screen {
+  position: fixed; inset: 0; z-index: 500;
+  display: none; place-items: center;
+  background: rgba(244, 239, 230, 0.78);
+  backdrop-filter: blur(28px) saturate(140%);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+}
+.auth-screen.show { display: grid; }
+.auth-card {
+  width: min(420px, calc(100vw - 32px)); padding: 26px;
+  border-radius: 22px; background: var(--glass-3);
+  border: 1px solid rgba(28, 25, 23, 0.1); box-shadow: var(--shadow-lg);
+}
+.auth-title { font-family: var(--font-display); font-size: 26px; font-weight: 600; margin-bottom: 4px; }
+.auth-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 18px; }
+.auth-card label {
+  display: block; margin: 12px 0 5px;
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint);
+}
+.auth-card input {
+  width: 100%; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid rgba(28, 25, 23, 0.12); background: var(--paper-soft);
+}
+.auth-actions { display: flex; gap: 10px; margin-top: 16px; }
+.auth-actions button {
+  flex: 1; padding: 10px 12px; border-radius: 10px;
+  background: var(--paper-raised); border: 1px solid rgba(28, 25, 23, 0.12);
+}
+.auth-actions .primary { background: var(--accent); border-color: var(--accent-deep); color: var(--paper-soft); font-weight: 600; }
+.auth-msg { min-height: 18px; margin-top: 12px; color: var(--danger); font-size: 12px; }
+.auth-user {
+  position: fixed; right: 22px; bottom: 22px; z-index: 70;
+  padding: 6px 10px; border-radius: 999px;
+  background: rgba(255,253,248,0.78); border: 1px solid rgba(28,25,23,0.08);
+  color: var(--ink-muted); font-family: var(--font-mono); font-size: 10.5px;
+}
+.auth-user button { color: var(--accent); margin-left: 8px; font-weight: 600; }
+
+.provider-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 999px;
+  border: 1px solid rgba(28, 25, 23, 0.12);
+  background: var(--paper-soft); color: var(--ink-muted);
+  font-family: var(--font-mono); font-size: 10.5px;
+}
+.provider-toggle .tag {
+  border-radius: 999px; padding: 2px 7px; line-height: 1.4;
+  border: 1px solid rgba(28, 25, 23, 0.1);
+  color: var(--ink);
+}
+.provider-toggle .tag.live {
+  color: var(--paper-soft);
+  background: var(--accent);
+  border-color: var(--accent-deep);
+}
+.provider-toggle .switch {
+  width: 34px; height: 20px; border-radius: 999px;
+  border: 1px solid rgba(28,25,23,0.18);
+  background: rgba(28,25,23,0.14);
+  position: relative;
+}
+.provider-toggle .switch::after {
+  content: ""; position: absolute; top: 1px; left: 1px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--paper-raised);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  transition: transform 150ms ease;
+}
+.provider-toggle.is-zdr .switch { background: var(--accent-soft); }
+.provider-toggle.is-zdr .switch::after { transform: translateX(14px); }
+.provider-toggle .hint { color: var(--ink-faint); font-size: 10px; }
+</style>
+</head>
+<body>
+
+<div class="backdrop"></div>
+<div class="aurora"></div>
+<div class="strata"></div>
+
+<main class="shell glass">
+
+  <!-- ═══════════════ SIDEBAR ═══════════════ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">
+        <svg class="strata-mark" viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+          <line x1="9"  y1="7"  x2="17" y2="7"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="7"  y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="5"  y1="17" x2="21" y2="17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="wordmark">
+          <div class="w1">Aprio</div>
+          <div class="w2">Strata</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label-row">
+        <div class="side-label">Clients</div>
+        <button class="side-add" id="btn-new-client" title="New client">+</button>
+      </div>
+      <div class="cat-list" id="cat-list"></div>
+    </div>
+
+    <div class="side-section side-deep" id="side-deep" hidden>
+      <div class="side-label">Deep extract</div>
+      <div class="deep-list" id="deep-list"></div>
+    </div>
+
+    <div class="side-bottom">
+      <button class="btn-deposit" id="btn-open-drawer">
+        <span class="plus">+</span> Deposit files
+      </button>
+      <div class="side-local" title="No files, metadata, or telemetry leaves this Mac.">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Runs entirely on your machine
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════════ CONTENT ═══════════════ -->
+  <section class="content">
+    <div class="toolbar">
+      <div class="breadcrumb">
+        <div class="ctx" id="ctx-title"></div>
+        <div class="meta" id="ctx-meta"></div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="provider-toggle" id="provider-toggle" title="ZDR on uses Ollama. ZDR off uses Azure OpenAI.">
+        <span class="hint">ZDR</span>
+        <span class="switch"></span>
+        <span class="tag" id="provider-tag">azure_openai</span>
+      </button>
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="search" placeholder="Search samples…" />
+      </div>
+    </div>
+
+    <div class="body" id="body">
+      <!-- grid / preview / empty state injected here -->
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════════ UPLOAD DRAWER ═══════════════ -->
+<div class="drawer-scrim" id="scrim"></div>
+<aside class="drawer glass glass--elevated" id="drawer">
+  <div class="drawer-head">
+    <div class="t">Deposit new samples</div>
+    <div class="s">We'll examine each and sort it into its layer.</div>
+    <button class="close" id="btn-close-drawer">×</button>
+  </div>
+  <div class="drawer-body">
+    <div class="batch-client-box">
+      <div class="bc-label">Client for this batch</div>
+      <div class="bc-row">
+        <input id="batch-client" class="bc-input" placeholder="Pick or create a client…" list="clients-datalist" />
+        <span class="bc-hint" id="batch-client-hint">Required before triage</span>
+      </div>
+      <div class="bc-tax" id="batch-client-tax"></div>
+    </div>
+    <div id="drop" class="drop">
+      <div class="icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+      </div>
+      <strong>Drop files or a folder</strong>
+      <div class="hint">click to pick files  ·  drop a folder for its whole contents</div>
+      <input id="file" type="file" multiple class="hidden"
+        accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,.tif,.tiff" />
+    </div>
+    <div class="queue" id="queue"></div>
+  </div>
+  <div class="drawer-foot">
+    <div class="summary" id="drawer-summary">0 queued</div>
+    <button class="btn-ghost" id="process">Triage</button>
+    <button class="btn-primary" id="apply" disabled>Commit</button>
+  </div>
+</aside>
+
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+<div class="auth-screen" id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-title">Sign in with Microsoft</div>
+    <div class="auth-sub">Your firm's documents, taxonomy, and analyst improvements are stored in Azure.</div>
+    <label>Firm name <span style="text-transform:none;letter-spacing:0;color:var(--ink-faint)">(first sign-in only)</span></label>
+    <input id="auth-firm" placeholder="Acme Advisors" />
+    <div class="auth-actions">
+      <button class="primary" id="auth-login">Continue with Microsoft</button>
+    </div>
+    <div class="auth-msg" id="auth-msg"></div>
+  </div>
+</div>
+<div class="auth-user hidden" id="auth-user"></div>
+<datalist id="clients-datalist"></datalist>
+<datalist id="buckets-datalist"></datalist>
+
+<!-- keyboard shortcut overlay — toggled with ? -->
+<div class="shortcut-scrim" id="shortcut-scrim"></div>
+<aside class="shortcut-overlay glass glass--elevated" id="shortcut-overlay">
+  <div class="shortcut-hd">
+    <div class="shortcut-title">Keyboard</div>
+    <button class="shortcut-close" id="shortcut-close">×</button>
+  </div>
+  <div class="shortcut-body">
+    <div class="sk-row"><kbd>/</kbd><span>Focus search</span></div>
+    <div class="sk-row"><kbd>D</kbd><span>Open deposit drawer</span></div>
+    <div class="sk-row"><kbd>⌘</kbd><kbd>↵</kbd><span>Commit (in drawer)</span></div>
+    <div class="sk-row"><kbd>Esc</kbd><span>Close drawer / preview / this overlay</span></div>
+    <div class="sk-row"><kbd>?</kbd><span>Toggle this help</span></div>
+  </div>
+  <div class="shortcut-foot">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    Azure-connected mode uses Entra ID, Azure Storage, Microsoft Graph, and Azure OpenAI.
+  </div>
+</aside>
+<button class="help-fab" id="help-fab" title="Keyboard shortcuts (?)">?</button>
+
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+<script>
+// ══════════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════════
+const $  = id => document.getElementById(id);
+const qs = (sel, ctx=document) => ctx.querySelector(sel);
+const esc = s => (s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+const state = {
+  files: [],                 // sorted library (from /sorter/files)
+  clients: [],               // all known clients (includes empty folders)
+  taxonomies: {},            // client_name -> [bucket, bucket, ...]
+  activeClient: null,        // client name currently selected
+  activeBucket: null,        // null = all buckets for that client; string = specific bucket
+  expanded: new Set(),       // clients currently expanded in the sidebar
+  search: "",
+  previewing: null,
+  rows: new Map(),           // upload queue
+  selectedCards: new Set(),  // multi-select in content pane (final_names)
+  batchClient: "",           // the single client for the current deposit batch
+  azure: { enabled: false },
+  llmProvider: "azure_openai",
+  session: null,
+  authClient: null,
+  account: null,
+  graphToken: null,
+};
+
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init={}) => {
+  const url = typeof input === "string" ? input : (input?.url || "");
+  if (url.startsWith("/sorter/") && state.session?.access_token) {
+    const headers = new Headers(init.headers || {});
+    headers.set("Authorization", "Bearer " + state.session.access_token);
+    if (url.startsWith("/sorter/graph/") && state.graphToken) headers.set("X-MS-Graph-Token", state.graphToken);
+    init = {...init, headers};
+  }
+  return nativeFetch(input, init);
+};
+
+// ══════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════
+function fmtSize(n) {
+  if (n == null) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n/1024).toFixed(1) + " KB";
+  if (n < 1073741824) return (n/1048576).toFixed(2) + " MB";
+  return (n/1073741824).toFixed(2) + " GB";
+}
+function fmtAgo(iso) {
+  if (!iso) return "";
+  const s = Math.floor((Date.now() - new Date(iso).getTime())/1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s/60) + " min ago";
+  if (s < 86400) return Math.floor(s/3600) + " h ago";
+  if (s < 604800) return Math.floor(s/86400) + " d ago";
+  return new Date(iso).toLocaleDateString();
+}
+
+function setProviderUI(provider) {
+  const toggle = $("provider-toggle");
+  const tag = $("provider-tag");
+  if (!toggle || !tag) return;
+  const p = provider === "ollama" ? "ollama" : "azure_openai";
+  state.llmProvider = p;
+  tag.textContent = p;
+  tag.classList.toggle("live", p === "ollama");
+  toggle.classList.toggle("is-zdr", p === "ollama");
+  toggle.title = p === "ollama"
+    ? "ZDR is ON: triage model calls use Ollama."
+    : "ZDR is OFF: triage model calls use Azure OpenAI.";
+}
+
+async function initProviderToggle() {
+  const toggle = $("provider-toggle");
+  if (!toggle) return;
+  const stored = localStorage.getItem("strata.llm_provider");
+  const defaultProvider = stored || "azure_openai";
+  setProviderUI(defaultProvider);
+  try {
+    const r = await fetch("/sorter/ai/provider");
+    if (r.ok) {
+      const data = await r.json();
+      setProviderUI(stored || data.provider || "azure_openai");
+    }
+  } catch {}
+  toggle.onclick = async () => {
+    const next = state.llmProvider === "ollama" ? "azure_openai" : "ollama";
+    const prev = state.llmProvider;
+    setProviderUI(next);
+    localStorage.setItem("strata.llm_provider", next);
+    try {
+      const r = await fetch("/sorter/ai/provider", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({provider: next}),
+      });
+      if (!r.ok) throw new Error("provider update failed");
+      toast(`Model mode: <b>${next === "ollama" ? "ZDR (Ollama)" : "Azure OpenAI"}</b>`, "ok", 2200);
+    } catch {
+      setProviderUI(prev);
+      localStorage.setItem("strata.llm_provider", prev);
+      toast("Could not switch model provider", "er");
+    }
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════════════════════════════
+function saveSession(session) {
+  state.session = session || null;
+  if (session) localStorage.setItem("strata.azure.session", JSON.stringify(session));
+  else localStorage.removeItem("strata.azure.session");
+}
+
+function storedSession() {
+  try { return JSON.parse(localStorage.getItem("strata.azure.session") || "null"); }
+  catch { return null; }
+}
+
+async function ensureMsal(cfg) {
+  if (!window.msal) throw new Error("Microsoft authentication library did not load");
+  if (!state.authClient) {
+    state.authClient = new msal.PublicClientApplication({
+      auth: {
+        clientId: cfg.client_id,
+        authority: cfg.authority,
+        redirectUri: cfg.redirect_uri || location.origin + location.pathname,
+      },
+      cache: { cacheLocation: "localStorage" },
+    });
+    if (state.authClient.initialize) await state.authClient.initialize();
+    const redirectResult = await state.authClient.handleRedirectPromise().catch(() => null);
+    if (redirectResult?.account) state.account = redirectResult.account;
+  }
+  state.account = state.account || state.authClient.getAllAccounts()[0] || null;
+  return state.authClient;
+}
+
+async function acquireAzureToken(cfg, scopes) {
+  const app = await ensureMsal(cfg);
+  const request = { scopes, account: state.account || undefined };
+  try {
+    const result = state.account ? await app.acquireTokenSilent(request) : null;
+    if (result?.account) state.account = result.account;
+    if (result?.accessToken) return result.accessToken;
+  } catch {}
+  const result = await app.loginPopup({ scopes });
+  state.account = result.account;
+  return result.accessToken;
+}
+
+async function microsoftAuth(cfg) {
+  const apiToken = await acquireAzureToken(cfg, [cfg.api_scope]);
+  let graphToken = null;
+  if (cfg.graph_scopes?.length) {
+    try { graphToken = await acquireAzureToken(cfg, cfg.graph_scopes); }
+    catch { graphToken = null; }
+  }
+  state.graphToken = graphToken;
+  return { access_token: apiToken };
+}
+
+async function refreshAzureSession(cfg) {
+  const app = await ensureMsal(cfg);
+  const account = app.getAllAccounts()[0];
+  if (!account) return null;
+  state.account = account;
+  const result = await app.acquireTokenSilent({ scopes: [cfg.api_scope], account }).catch(() => null);
+  if (!result?.accessToken) return null;
+  if (cfg.graph_scopes?.length) {
+    const graph = await app.acquireTokenSilent({ scopes: cfg.graph_scopes, account }).catch(() => null);
+    state.graphToken = graph?.accessToken || null;
+  }
+  return { access_token: result.accessToken };
+}
+
+async function azureLogout() {
+  const app = state.authClient;
+  saveSession(null);
+  state.graphToken = null;
+  if (app) {
+    await app.logoutPopup({ account: state.account }).catch(() => null);
+  }
+}
+
+async function bootstrapFirm() {
+  const firm = $("auth-firm").value.trim() || "My Firm";
+  const r = await fetch("/sorter/auth/bootstrap", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({firm_name: firm}),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) throw new Error(d.detail || d.error || "Could not create firm profile");
+  return d.user;
+}
+
+function renderAuthUser(user) {
+  const el = $("auth-user");
+  if (!state.azure.enabled || !user) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `${esc(user.email || "signed in")} <button id="auth-logout">Log out</button>`;
+  $("auth-logout").onclick = async () => {
+    await azureLogout();
+    location.reload();
+  };
+}
+
+async function requireAuth() {
+  const cfg = await nativeFetch("/sorter/azure/config").then(r => r.json()).catch(() => ({enabled:false}));
+  state.azure = cfg;
+  if (!cfg.enabled) return true;
+
+  const screen = $("auth-screen");
+  const msg = $("auth-msg");
+  saveSession(storedSession());
+  const refreshed = await refreshAzureSession(cfg).catch(() => null);
+  if (refreshed) saveSession(refreshed);
+  if (state.session?.access_token) {
+    const me = await fetch("/sorter/auth/me").then(r => r.ok ? r.json() : null).catch(() => null);
+    if (me?.user) { renderAuthUser(me.user); return true; }
+  }
+  screen.classList.add("show");
+
+  async function finishWith(session) {
+    saveSession(session);
+    const user = await bootstrapFirm();
+    screen.classList.remove("show");
+    renderAuthUser(user);
+    await loadFiles();
+  }
+
+  $("auth-login").onclick = async () => {
+    msg.textContent = "";
+    try {
+      const data = await microsoftAuth(cfg);
+      await finishWith(data);
+    } catch (e) { msg.textContent = e.message || String(e); }
+  };
+  return false;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DATA
+// ══════════════════════════════════════════════════════════════════
+async function loadFiles() {
+  try {
+    const r = await fetch("/sorter/files");
+    const d = await r.json();
+    state.files = d.files || [];
+    state.clients = d.clients || [];
+    state.taxonomies = d.client_taxonomies || {};
+  } catch { state.files = []; state.clients = []; state.taxonomies = {}; }
+  // Pick a sensible default on first load: client with the most-recent file.
+  if (state.activeClient === null) {
+    const clients = allClients();
+    if (clients.length) {
+      const latestByClient = new Map();
+      for (const f of state.files) {
+        if (!f.client) continue;
+        const prev = latestByClient.get(f.client);
+        if (!prev || f.applied_at > prev) latestByClient.set(f.client, f.applied_at);
+      }
+      const mostRecent = [...latestByClient.entries()].sort((a,b) => b[1].localeCompare(a[1]))[0];
+      state.activeClient = mostRecent ? mostRecent[0] : clients[0];
+      state.expanded.add(state.activeClient);
+    }
+  }
+  renderSidebar();
+  render();
+  refreshClientDatalist();
+}
+
+function bucketsFor(client) {
+  return state.taxonomies[client] || ["Finance", "Tax", "Legal"];
+}
+
+function allClients() {
+  // union of manifest.clients + clients inferred from files
+  const s = new Set(state.clients);
+  for (const f of state.files) {
+    if (!f.is_duplicate && f.client) s.add(f.client);
+  }
+  s.delete("Unassigned"); // always placed at end
+  return [...s].sort((a, b) => a.localeCompare(b));
+}
+
+function refreshClientDatalist() {
+  const dl = document.getElementById("clients-datalist");
+  if (dl) dl.innerHTML = allClients().map(c => `<option value="${esc(c)}"></option>`).join("");
+  const bdl = document.getElementById("buckets-datalist");
+  if (bdl) {
+    const all = new Set();
+    for (const c of allClients()) bucketsFor(c).forEach(b => all.add(b));
+    ["Finance", "Tax", "Legal", "Unfiled"].forEach(b => all.add(b));
+    bdl.innerHTML = [...all].sort().map(b => `<option value="${esc(b)}"></option>`).join("");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ══════════════════════════════════════════════════════════════════
+function renderSidebar() {
+  const list = $("cat-list");
+  list.innerHTML = "";
+
+  // Counts: files per client AND per client+bucket combo.
+  const clientCounts = new Map();
+  const bucketCounts = new Map();
+  for (const c of allClients()) clientCounts.set(c, 0);
+  for (const f of state.files) {
+    const c = f.client || "Unassigned";
+    clientCounts.set(c, (clientCounts.get(c) || 0) + 1);
+    const b = f.bucket || "Unfiled";
+    bucketCounts.set(c + "::" + b, (bucketCounts.get(c + "::" + b) || 0) + 1);
+  }
+  const hasUnassigned = state.files.some(f => f.client === "Unassigned" || !f.client);
+
+  const entries = [...clientCounts.entries()].sort((a, b) => {
+    if (a[0] === "Unassigned") return 1;
+    if (b[0] === "Unassigned") return -1;
+    return a[0].localeCompare(b[0]);
+  }).filter(([c, n]) => c !== "Unassigned" || (hasUnassigned && n > 0));
+
+  for (const [name, n] of entries) {
+    const isExpanded = state.expanded.has(name);
+    const isActiveClient = state.activeClient === name && state.activeBucket === null;
+
+    const clientRow = document.createElement("div");
+    clientRow.className = "cat" + (isActiveClient ? " active" : "");
+    clientRow.dataset.client = name;
+    const canDelete = name !== "Unassigned" && n === 0;
+    clientRow.innerHTML = `
+      <div class="chev ${isExpanded ? "open" : ""}">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="cat-label">${esc(name)}</div>
+      ${canDelete ? '<button class="del" title="Remove client folder">×</button>' : ""}
+      <div class="count">${n}</div>`;
+    list.appendChild(clientRow);
+
+    if (isExpanded) {
+      const fromTax = bucketsFor(name);
+      const fromFiles = new Set();
+      for (const f of state.files) {
+        if ((f.client || "Unassigned") === name) fromFiles.add(f.bucket || "Unfiled");
+      }
+      const bucketsToShow = [...new Set([...fromTax, ...fromFiles])].sort((a, b) => {
+        if (a === "Unfiled") return 1; if (b === "Unfiled") return -1;
+        return a.localeCompare(b);
+      });
+
+      for (const b of bucketsToShow) {
+        const bc = bucketCounts.get(name + "::" + b) || 0;
+        const isActiveBucket = state.activeClient === name && state.activeBucket === b;
+        const canDeleteBucket = bc === 0 && b !== "Unfiled";
+        const bRow = document.createElement("div");
+        bRow.className = "bucket-row" + (isActiveBucket ? " active" : "");
+        bRow.dataset.client = name;
+        bRow.dataset.bucket = b;
+        bRow.innerHTML = `
+          <div class="bucket-dot"></div>
+          <div class="bucket-label">${esc(b)}</div>
+          ${canDeleteBucket ? '<button class="del-bucket" title="Remove empty bucket">×</button>' : ""}
+          <div class="count">${bc}</div>`;
+        list.appendChild(bRow);
+      }
+
+      const addRow = document.createElement("div");
+      addRow.className = "bucket-add-row";
+      addRow.dataset.client = name;
+      addRow.innerHTML = `<div class="bucket-dot add"></div><div class="bucket-label">Add bucket</div><span class="plus-tiny">+</span>`;
+      list.appendChild(addRow);
+    }
+  }
+
+  wireCategories();
+}
+
+function wireCategories() {
+  document.querySelectorAll(".cat").forEach(el => {
+    const clientName = el.dataset.client;
+    if (!clientName) return;
+    el.onclick = e => {
+      if (e.target.closest(".del")) return;
+      // Click on the chevron = just toggle expand. Click anywhere else = also set active.
+      const chevClick = e.target.closest(".chev");
+      if (state.expanded.has(clientName)) {
+        if (chevClick) {
+          state.expanded.delete(clientName);
+        } else {
+          // already active? collapse. Otherwise select.
+          if (state.activeClient === clientName && state.activeBucket === null) {
+            state.expanded.delete(clientName);
+          }
+          selectClient(clientName, null);
+          return;
+        }
+      } else {
+        state.expanded.add(clientName);
+        selectClient(clientName, null);
+        return;
+      }
+      renderSidebar();
+      render();
+    };
+    el.ondragover = ev => { if (state.draggingFinalName) { ev.preventDefault(); el.classList.add("dragover"); } };
+    el.ondragleave = () => el.classList.remove("dragover");
+    el.ondrop = async ev => {
+      ev.preventDefault();
+      el.classList.remove("dragover");
+      const final_name = state.draggingFinalName;
+      if (!final_name) return;
+      try {
+        await fetch("/sorter/move", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({final_name, client: clientName})
+        });
+        toast(`Moved to <b>${esc(clientName)}</b>`, "ok");
+        await loadFiles();
+      } catch { toast("Move failed", "er"); }
+    };
+    const delBtn = el.querySelector(".del");
+    if (delBtn) delBtn.onclick = async ev => {
+      ev.stopPropagation();
+      if (!confirm(`Remove the empty "${clientName}" folder?`)) return;
+      try {
+        await fetch("/sorter/client/delete", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({name: clientName})
+        });
+        if (state.activeClient === clientName) { state.activeClient = null; state.activeBucket = null; }
+        state.expanded.delete(clientName);
+        await loadFiles();
+      } catch { toast("Couldn't remove folder", "er"); }
+    };
+  });
+
+  document.querySelectorAll(".bucket-row").forEach(el => {
+    const { client, bucket } = el.dataset;
+    el.onclick = e => {
+      if (e.target.closest(".del-bucket")) return;
+      selectClient(client, bucket);
+    };
+    el.ondragover = ev => { if (state.draggingFinalName) { ev.preventDefault(); el.classList.add("dragover"); } };
+    el.ondragleave = () => el.classList.remove("dragover");
+    el.ondrop = async ev => {
+      ev.preventDefault();
+      el.classList.remove("dragover");
+      const final_name = state.draggingFinalName;
+      if (!final_name) return;
+      try {
+        await Promise.all([
+          fetch("/sorter/move", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({final_name, client})
+          }),
+          fetch("/sorter/bucket/move", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({final_name, bucket})
+          }),
+        ]);
+        toast(`Moved to <b>${esc(client)}</b> · <b>${esc(bucket)}</b>`, "ok");
+        await loadFiles();
+      } catch { toast("Move failed", "er"); }
+    };
+    const delBtn = el.querySelector(".del-bucket");
+    if (delBtn) delBtn.onclick = async ev => {
+      ev.stopPropagation();
+      if (!confirm(`Remove the empty "${bucket}" bucket from ${client}?`)) return;
+      try {
+        const r = await fetch("/sorter/bucket/remove", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({client, bucket})
+        });
+        const d = await r.json();
+        if (!d.ok) { toast(d.error || "Couldn't remove", "er"); return; }
+        if (state.activeBucket === bucket) state.activeBucket = null;
+        await loadFiles();
+      } catch { toast("Couldn't remove bucket", "er"); }
+    };
+  });
+
+  document.querySelectorAll(".bucket-add-row").forEach(el => {
+    const { client } = el.dataset;
+    el.onclick = async () => {
+      const name = prompt(`New bucket name for ${client}:`);
+      if (!name) return;
+      try {
+        const r = await fetch("/sorter/bucket/add", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({client, bucket: name})
+        });
+        const d = await r.json();
+        if (!d.ok) { toast(d.error || "Invalid bucket name", "er"); return; }
+        await loadFiles();
+        toast(`Added bucket <b>${esc(d.bucket)}</b>`, "ok");
+      } catch { toast("Couldn't add bucket", "er"); }
+    };
+  });
+}
+
+$("btn-new-client").onclick = async () => {
+  const name = prompt("New client folder name:");
+  if (!name) return;
+  try {
+    const r = await fetch("/sorter/client/create", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({name})
+    });
+    const d = await r.json();
+    if (!d.ok) { toast("Invalid client name", "er"); return; }
+    await loadFiles();
+    selectClient(d.name, null);
+    state.expanded.add(d.name);
+    renderSidebar();
+    toast(`Created <b>${esc(d.name)}</b>`, "ok");
+  } catch { toast("Couldn't create client", "er"); }
+};
+
+function selectClient(client, bucket) {
+  state.activeClient = client;
+  state.activeBucket = bucket;
+  state.previewing = null;
+  state.selectedCards.clear();
+  renderSidebar();
+  render();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MAIN RENDER
+// ══════════════════════════════════════════════════════════════════
+function getVisibleFiles() {
+  if (!state.activeClient) return [];
+  let arr = state.files.filter(f => (f.client || "Unassigned") === state.activeClient);
+  if (state.activeBucket) arr = arr.filter(f => (f.bucket || "Unfiled") === state.activeBucket);
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    arr = arr.filter(f =>
+      (f.final_name||"").toLowerCase().includes(q) ||
+      (f.original||"").toLowerCase().includes(q) ||
+      (f.bucket||"").toLowerCase().includes(q)
+    );
+  }
+  return arr;
+}
+
+function render() {
+  const files = getVisibleFiles();
+  const title = state.activeClient
+    ? (state.activeBucket
+        ? `${state.activeClient} › ${state.activeBucket}`
+        : state.activeClient)
+    : "No clients yet";
+  $("ctx-title").textContent = title;
+  $("ctx-meta").textContent = `${files.length} file${files.length !== 1 ? "s" : ""}`;
+
+  const body = $("body");
+  if (state.previewing) { renderPreview(body); return; }
+  if (!files.length) {
+    const isEmptyLib = !state.activeClient;
+    body.innerHTML = `
+      <div class="empty">
+        <div class="big">${isEmptyLib ? "The library is quiet." : "This folder is bare."}</div>
+        <div class="small">${isEmptyLib ? "Create a client in the sidebar, or deposit files to get started." : "Nothing here yet. Drag files in from another folder or deposit new ones."}</div>
+        <button class="ghost-btn" onclick="openDrawer()">+ Deposit files</button>
+        <div class="local-note">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Everything runs on this machine. No cloud, no telemetry.
+        </div>
+      </div>`;
+    return;
+  }
+
+  // If we're at a client level (no specific bucket), group by bucket with section headers.
+  if (state.activeClient && !state.activeBucket) {
+    const byBucket = new Map();
+    for (const f of files) {
+      const b = f.bucket || "Unfiled";
+      if (!byBucket.has(b)) byBucket.set(b, []);
+      byBucket.get(b).push(f);
+    }
+    const order = [...bucketsFor(state.activeClient), ...[...byBucket.keys()].filter(b => !bucketsFor(state.activeClient).includes(b))];
+    const sections = [];
+    for (const b of order) {
+      const list = byBucket.get(b);
+      if (!list || !list.length) continue;
+      sections.push(`
+        <div class="section">
+          <div class="section-head">
+            <div class="section-label">${esc(b)}</div>
+            <div class="section-count">${list.length}</div>
+          </div>
+          <div class="grid">${list.map(fileCard).join("")}</div>
+        </div>`);
+    }
+    body.innerHTML = sections.join("");
+  } else {
+    body.innerHTML = `<div class="grid">${files.map(fileCard).join("")}</div>`;
+  }
+  body.querySelectorAll(".card").forEach(el => wireCard(el));
+}
+
+function fileCard(f) {
+  const echoes = f.echo_count || 0;
+  const bucket = f.bucket || "Unfiled";
+  return `
+    <div class="card${state.selectedCards.has(f.final_name) ? " is-selected" : ""}" data-name="${esc(f.final_name)}" data-bucket="${esc(bucket)}" draggable="true">
+      ${echoes > 0 ? `<div class="echo-chip" title="${echoes} echo${echoes !== 1 ? "es" : ""}"><span class="ripple"></span>${echoes}</div>` : ""}
+      <div class="fname">${esc(f.final_name)}</div>
+      <div class="meta">
+        <span>${fmtSize(f.size)}</span>
+        <span class="sep">·</span>
+        <span>${fmtAgo(f.applied_at)}</span>
+      </div>
+      <button class="bucket-pill" data-role="bucket-pill" title="Click to change bucket">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+        <span>${esc(bucket)}</span>
+      </button>
+    </div>`;
+}
+
+function wireCard(el) {
+  const name = el.dataset.name;
+  const file = state.files.find(f => f.final_name === name);
+  if (!file) return;
+  let hoverTimer = null, lastEvt = null;
+  el.onmouseenter = e => {
+    lastEvt = e;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => showTip(lastEvt, file), 500);
+  };
+  el.onmousemove = e => {
+    lastEvt = e;
+  };
+  el.onmouseleave = () => {
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+    scheduleHideTip();
+  };
+  el.onclick = e => {
+    clearTimeout(hoverTimer); hideTip();
+    // bucket pill click → open popover, don't open preview
+    if (e.target.closest("[data-role='bucket-pill']")) {
+      e.stopPropagation();
+      openBucketPopover(el, file);
+      return;
+    }
+    // Shift or Cmd/Ctrl click → multi-select instead of preview
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      e.preventDefault();
+      if (state.selectedCards.has(name)) state.selectedCards.delete(name);
+      else state.selectedCards.add(name);
+      el.classList.toggle("is-selected");
+      updateBulkBar();
+      return;
+    }
+    openPreview(file);
+  };
+  el.ondragstart = ev => {
+    clearTimeout(hoverTimer); hideTip();
+    state.draggingFinalName = name;
+    el.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+  };
+  el.ondragend = () => {
+    state.draggingFinalName = null;
+    el.classList.remove("dragging");
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BUCKET POPOVER (per-card quick reassign)
+// ══════════════════════════════════════════════════════════════════
+let _bucketPopoverEl = null;
+function closeBucketPopover() {
+  if (_bucketPopoverEl) { _bucketPopoverEl.remove(); _bucketPopoverEl = null; }
+  document.removeEventListener("click", _bucketPopoverOutside, true);
+  document.removeEventListener("keydown", _bucketPopoverKeydown);
+}
+function _bucketPopoverOutside(e) {
+  if (_bucketPopoverEl && !_bucketPopoverEl.contains(e.target)) closeBucketPopover();
+}
+function _bucketPopoverKeydown(e) {
+  if (e.key === "Escape") closeBucketPopover();
+}
+function openBucketPopover(cardEl, file) {
+  closeBucketPopover();
+  const client = file.client || "Unassigned";
+  const current = file.bucket || "Unfiled";
+  const buckets = [...new Set([...bucketsFor(client), "Unfiled"])];
+  const pop = document.createElement("div");
+  pop.className = "bucket-popover glass glass--elevated";
+  pop.innerHTML = `
+    <div class="bp-head">
+      <span class="bp-title">Move to</span>
+      <span class="bp-sub">${esc(client)}</span>
+    </div>
+    <div class="bp-options">
+      ${buckets.map(b => `<button class="bp-option${b === current ? " current" : ""}" data-b="${esc(b)}">${esc(b)}</button>`).join("")}
+      <button class="bp-option bp-new" data-b="__new__">+ New bucket…</button>
+    </div>`;
+  document.body.appendChild(pop);
+  _bucketPopoverEl = pop;
+  // Position above/below the pill
+  const r = cardEl.querySelector("[data-role='bucket-pill']").getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let x = r.left, y = r.top - ph - 6;
+  if (y < 8) y = r.bottom + 6;
+  if (x + pw > innerWidth - 8) x = innerWidth - pw - 8;
+  pop.style.left = x + "px"; pop.style.top = y + "px";
+
+  pop.querySelectorAll(".bp-option").forEach(btn => {
+    btn.onclick = async () => {
+      let target = btn.dataset.b;
+      if (target === "__new__") {
+        target = prompt(`New bucket for ${client}:`);
+        if (!target) { closeBucketPopover(); return; }
+      }
+      if (target === current) { closeBucketPopover(); return; }
+      closeBucketPopover();
+      await moveBucket(file.final_name, target, current, client);
+    };
+  });
+
+  setTimeout(() => {
+    document.addEventListener("click", _bucketPopoverOutside, true);
+    document.addEventListener("keydown", _bucketPopoverKeydown);
+  }, 0);
+}
+
+async function moveBucket(final_name, target, from, client) {
+  try {
+    const r = await fetch("/sorter/bucket/move", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({final_name, bucket: target})
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "failed");
+    await loadFiles();
+    toast(`Moved to <b>${esc(target)}</b>  ·  <a class="undo-link" data-fn="${esc(final_name)}" data-from="${esc(from)}" data-client="${esc(client)}" data-to="${esc(target)}">Undo</a>`, "ok", 6000);
+    wireUndoLink();
+  } catch { toast("Couldn't move bucket", "er"); }
+}
+
+function wireUndoLink() {
+  const link = toastEl.querySelector(".undo-link");
+  if (!link) return;
+  link.onclick = async e => {
+    e.preventDefault();
+    const { fn, from, client } = link.dataset;
+    toastEl.classList.remove("show");
+    try {
+      await fetch("/sorter/bucket/move", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({final_name: fn, bucket: from})
+      });
+      await loadFiles();
+      toast(`Reverted to <b>${esc(from)}</b>`, "ok");
+    } catch { toast("Undo failed", "er"); }
+  };
+}
+
+function updateBulkBar() {
+  let bar = $("bulk-bar");
+  const n = state.selectedCards.size;
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "bulk-bar";
+    bar.className = "bulk-bar glass glass--elevated";
+    document.body.appendChild(bar);
+  }
+  if (n === 0) { bar.classList.remove("show"); return; }
+  // Derive the union of possible buckets from the selected cards' clients
+  const clients = new Set();
+  for (const name of state.selectedCards) {
+    const f = state.files.find(x => x.final_name === name);
+    if (f?.client) clients.add(f.client);
+  }
+  const buckets = new Set();
+  for (const c of clients) bucketsFor(c).forEach(b => buckets.add(b));
+  buckets.add("Unfiled");
+  const bOptions = [...buckets].sort();
+  bar.innerHTML = `
+    <div class="bb-count"><b>${n}</b> selected</div>
+    <div class="bb-actions">
+      <div class="bb-label">Move to</div>
+      ${bOptions.map(b => `<button class="bb-bucket" data-b="${esc(b)}">${esc(b)}</button>`).join("")}
+      <button class="bb-clear">Clear</button>
+    </div>`;
+  bar.classList.add("show");
+  bar.querySelectorAll(".bb-bucket").forEach(btn => {
+    btn.onclick = async () => {
+      const target = btn.dataset.b;
+      const targets = [...state.selectedCards];
+      for (const fn of targets) {
+        await fetch("/sorter/bucket/move", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({final_name: fn, bucket: target})
+        });
+      }
+      state.selectedCards.clear();
+      await loadFiles();
+      toast(`Moved <b>${targets.length}</b> file${targets.length !== 1 ? "s" : ""} to <b>${esc(target)}</b>`, "ok");
+      updateBulkBar();
+    };
+  });
+  bar.querySelector(".bb-clear").onclick = () => {
+    state.selectedCards.clear();
+    document.querySelectorAll(".card.is-selected").forEach(c => c.classList.remove("is-selected"));
+    updateBulkBar();
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PREVIEW
+// ══════════════════════════════════════════════════════════════════
+function openPreview(f) {
+  state.previewing = f;
+  render();
+}
+function closePreview() {
+  state.previewing = null;
+  render();
+}
+
+function renderPreview(body) {
+  const f = state.previewing;
+  const echoes = f.echoes || [];
+  let echoSection = "";
+  if (echoes.length) {
+    const rows = [...echoes].reverse().map(ec => `
+      <div class="preview-echo">
+        <div class="preview-echo-name">${esc(ec.original)}</div>
+        <div class="preview-echo-when">${fmtAgo(ec.uploaded_at)}</div>
+      </div>`).join("");
+    echoSection = `
+      <div class="meta-section-head">Echoes  ·  <em>${echoes.length}</em></div>
+      <div class="preview-echoes">${rows}</div>`;
+  }
+  body.innerHTML = `
+    <div class="preview-wrap">
+      <div class="preview-frame">
+        <iframe src="${f.url}#toolbar=0&navpanes=0" title="${esc(f.final_name)}"></iframe>
+      </div>
+      <div class="preview-meta glass--inner" style="padding:18px">
+        <h3>Sample details</h3>
+        <div class="meta-row"><div class="k">New name</div><div class="v">${esc(f.final_name)}</div></div>
+        <div class="meta-row"><div class="k">Original</div><div class="v">${esc(f.original || "(unknown)")}</div></div>
+        <div class="meta-row"><div class="k">Client</div><div class="v body">${esc(f.client || "Unassigned")}</div></div>
+        <div class="meta-row"><div class="k">Size</div><div class="v">${fmtSize(f.size)}</div></div>
+        <div class="meta-row"><div class="k">Deposited</div><div class="v body">${fmtAgo(f.applied_at)}</div></div>
+        ${echoSection}
+        <div class="preview-actions">
+          <button class="pa-btn" onclick="closePreview()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+            Back to ${esc(state.activeCategory || "")}
+          </button>
+          <a class="pa-btn" href="${f.url}" target="_blank" rel="noopener">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+            Open in new tab
+          </a>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// HOVER TOOLTIP
+// ══════════════════════════════════════════════════════════════════
+const tip = $("tip");
+let tipHideTimer = null;
+let tipPinned = false;
+function scheduleHideTip() {
+  clearTimeout(tipHideTimer);
+  tipHideTimer = setTimeout(() => {
+    if (!tipPinned) hideTip();
+  }, 220);
+}
+tip.addEventListener("mouseenter", () => {
+  tipPinned = true;
+  clearTimeout(tipHideTimer);
+});
+tip.addEventListener("mouseleave", () => {
+  tipPinned = false;
+  hideTip();
+});
+function showTip(e, f) {
+  const echoes = f.echoes || [];
+  let echoSection = "";
+  if (echoes.length) {
+    const rows = echoes.slice(-4).reverse().map(ec => `
+      <div class="tip-echo">
+        <div class="tip-echo-name">${esc(ec.original)}</div>
+        <div class="tip-echo-when">${fmtAgo(ec.uploaded_at)}</div>
+      </div>`).join("");
+    const more = echoes.length > 4 ? `<div class="tip-echo-more">+${echoes.length - 4} earlier</div>` : "";
+    echoSection = `
+      <div class="tip-sep"></div>
+      <div class="tip-hd">Echoes · ${echoes.length}</div>
+      <div class="tip-echoes">${rows}${more}</div>`;
+  }
+  tip.innerHTML = `
+    <div class="tip-hd">Sample details</div>
+    <div class="tip-og">${esc(f.original || "(unknown)")}</div>
+    <div class="tip-sep"></div>
+    <div class="tip-row"><div class="k">new</div><div class="v">${esc(f.final_name)}</div></div>
+    <div class="tip-row"><div class="k">client</div><div class="v">${esc(f.client || "Unassigned")}</div></div>
+    <div class="tip-row"><div class="k">size</div><div class="v">${fmtSize(f.size)}</div></div>
+    <div class="tip-row"><div class="k">deposited</div><div class="v">${fmtAgo(f.applied_at)}</div></div>
+    ${echoSection}
+    ${f.exists !== false ? `
+    <div class="tip-sep"></div>
+    <div class="tip-deep-row">
+      <div class="tip-deep-btns">
+        <button type="button" class="tip-deep-btn" onclick="event.preventDefault(); event.stopPropagation(); deepExtract(this, this.dataset.fn);" data-fn="${esc(f.final_name)}" title="Run MinerU hybrid-auto-engine and produce a downloadable XLSX of canonical financial rows. Cached after the first run.">Deep extract</button>
+      </div>
+      <div class="tip-deep-hint">Runs <code>hybrid-auto-engine</code> on this file and produces an XLSX of canonical financial rows. Cached by content hash — re-clicking is instant.</div>
+    </div>` : ""}`;
+  tip.style.display = "block";
+  positionTip(e);
+  requestAnimationFrame(() => tip.classList.add("show"));
+}
+function positionTip(e) {
+  const pad = 14;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + w > innerWidth - 10) x = e.clientX - w - pad;
+  if (y + h > innerHeight - 10) y = e.clientY - h - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() {
+  clearTimeout(tipHideTimer);
+  tipPinned = false;
+  tip.classList.remove("show");
+  setTimeout(() => { if (!tip.classList.contains("show")) tip.style.display = "none"; }, 160);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DEEP EXTRACT — sidebar progress rows
+// ══════════════════════════════════════════════════════════════════
+const deepListEl = $("deep-list");
+const deepSection = $("side-deep");
+function fmtMmss(seconds) {
+  if (!isFinite(seconds) || seconds < 0) seconds = 0;
+  const s = Math.round(seconds);
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function _refreshDeepSectionVisibility() {
+  if (deepListEl.children.length === 0) deepSection.setAttribute("hidden", "");
+  else deepSection.removeAttribute("hidden");
+}
+function startDeepRow(finalName) {
+  const row = document.createElement("div");
+  row.className = "deep-row is-running";
+  row.innerHTML = `
+    <div class="dr-top">
+      <div class="dr-dot" aria-hidden="true"></div>
+      <div class="dr-name"></div>
+      <button type="button" class="dr-stop">Stop</button>
+      <button type="button" class="dr-close" aria-label="Dismiss">×</button>
+    </div>
+    <div class="dr-bar"><div class="dr-fill"></div></div>
+    <div class="dr-meta"><span class="dr-status">Starting…</span><span class="dr-right"></span></div>
+  `;
+  row.querySelector(".dr-name").textContent = finalName;
+  const fill = row.querySelector(".dr-fill");
+  const statusEl = row.querySelector(".dr-status");
+  const rightEl = row.querySelector(".dr-right");
+  const closeBtn = row.querySelector(".dr-close");
+  const stopBtn = row.querySelector(".dr-stop");
+  let onAbort = null;
+  let openHandler = null;
+  function remove() { onAbort = null; row.remove(); _refreshDeepSectionVisibility(); }
+  stopBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (onAbort) onAbort();
+  });
+  closeBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (onAbort) onAbort();
+    remove();
+  });
+  row.addEventListener("click", (ev) => {
+    if (ev.target.closest(".dr-close")) return;
+    if (openHandler) openHandler();
+  });
+  deepListEl.appendChild(row);
+  _refreshDeepSectionVisibility();
+  return {
+    el: row,
+    setAbortHandler(fn) {
+      onAbort = typeof fn === "function" ? fn : null;
+    },
+    setMeta(pageCount, etaSeconds, backend, transport, apiHost) {
+      const pages = pageCount > 0 ? `${pageCount} pages` : "size unknown";
+      const b = esc(backend || "");
+      const host = esc(apiHost || "");
+      const via =
+        transport === "api"
+          ? `mineru-api <span class="dr-mono">${host || "remote"}</span>`
+          : `<span class="dr-warn">local mineru</span> — set <code>MINERU_API_URL</code> on the <b>API server</b> (e.g. SSH tunnel) to hit a remote GPU`;
+      statusEl.innerHTML = `<b>${pages}</b> · ${via} · <b>${b}</b>`;
+      rightEl.textContent = etaSeconds ? `ETA ~${fmtMmss(etaSeconds)}` : "ETA …";
+    },
+    tick(elapsed, etaSeconds, remaining, pct, pastEta) {
+      const pctNum = Math.max(0, Math.min(0.995, Number(pct) || 0));
+      fill.style.width = (pctNum * 100).toFixed(1) + "%";
+      const elapsedTxt = fmtMmss(elapsed);
+      statusEl.innerHTML = `<b>${(pctNum * 100).toFixed(0)}%</b> · ${elapsedTxt} elapsed`;
+      const remNum = Number(remaining);
+      if (pastEta) {
+        rightEl.textContent = "still running (past ETA)";
+      } else if (isFinite(remNum) && remNum >= 0) {
+        rightEl.textContent = remNum > 0 ? `~${fmtMmss(remNum)} left` : "wrapping up…";
+      }
+    },
+    succeed(html, elapsed, tableCount, openCb) {
+      onAbort = null;
+      row.classList.remove("is-running");
+      row.classList.add("is-done", "is-clickable");
+      fill.style.width = "100%";
+      const tables = (tableCount != null) ? ` · <b>${tableCount}</b> tables` : "";
+      statusEl.innerHTML = `<b>Done</b> · ${fmtMmss(elapsed)}${tables}`;
+      rightEl.textContent = "Open ↗";
+      openHandler = openCb;
+    },
+    stopped() {
+      onAbort = null;
+      row.classList.remove("is-running");
+      row.classList.add("is-stopped");
+      fill.style.width = "100%";
+      statusEl.innerHTML = `<b>Stopped</b>`;
+      rightEl.textContent = "";
+      openHandler = null;
+    },
+    fail(message) {
+      onAbort = null;
+      row.classList.remove("is-running");
+      row.classList.add("is-error");
+      fill.style.width = "100%";
+      statusEl.innerHTML = `<b>Failed</b>`;
+      rightEl.textContent = (message || "").slice(0, 60);
+      openHandler = null;
+    },
+    remove,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DEEP EXTRACT — POST /sorter/deep-extract/{final_name}
+// One MinerU hybrid-auto-engine pass per file. Cached by content hash.
+// On done: row click -> XLSX download from the canonical-rows artifact.
+// ══════════════════════════════════════════════════════════════════
+async function deepExtract(triggerEl, finalName) {
+  if (!finalName) return;
+  const row = startDeepRow(finalName);
+  const ac = new AbortController();
+  row.setAbortHandler(() => ac.abort());
+  let receivedDone = false;
+  try {
+    const url = "/sorter/deep-extract/" + encodeURIComponent(finalName);
+    const r = await fetch(url, { method: "POST", signal: ac.signal });
+    if (!r.ok || !r.body) {
+      const t = await (r.text ? r.text().catch(() => "") : Promise.resolve(""));
+      row.fail((t.slice(0, 140) || ("HTTP " + r.status)));
+      return;
+    }
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line); } catch (_e) { continue; }
+        if (evt.type === "meta") {
+          if (evt.cached) {
+            row.setMeta(0, 0, "cached", "", "");
+          } else {
+            row.setMeta(evt.page_count || 0, evt.eta_seconds || 0, evt.backend || "", evt.mineru_transport || "", evt.mineru_api_host || "");
+          }
+        } else if (evt.type === "progress") {
+          row.tick(evt.elapsed || 0, evt.eta_seconds || 0, evt.remaining || 0, evt.pct || 0, !!evt.past_eta);
+        } else if (evt.type === "done") {
+          receivedDone = true;
+          const rowCount = (evt.row_count != null) ? evt.row_count : 0;
+          const downloadUrl = evt.download_url || ("/sorter/finance/extractions/" + encodeURIComponent(evt.document_id) + "/export?format=xlsx");
+          if (rowCount === 0) {
+            row.succeed(null, evt.elapsed || 0, 0, () => toast("No financial rows found in this document.", "er"));
+          } else {
+            row.succeed(null, evt.elapsed || 0, rowCount, () => { window.location.href = downloadUrl; });
+          }
+        } else if (evt.type === "error") {
+          row.fail(evt.error || "MinerU error");
+        }
+      }
+    }
+    if (!receivedDone && !ac.signal.aborted) row.fail("Stream ended without result");
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      if (row.el.isConnected) row.stopped();
+      return;
+    }
+    const msg = (err && err.message) ? err.message : String(err);
+    row.fail(msg);
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════════════════════════
+const toastEl = $("toast");
+function toast(html, kind="", ms=2800) {
+  toastEl.innerHTML = (kind ? `<span class="${kind}">${kind==="ok"?"●":"!"}</span>` : "") + " " + html;
+  toastEl.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => toastEl.classList.remove("show"), ms);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// DRAWER
+// ══════════════════════════════════════════════════════════════════
+const drawer = $("drawer"), scrim = $("scrim");
+function openDrawer() {
+  drawer.classList.add("open"); scrim.classList.add("open");
+  // If nothing's been set and there's a sidebar-active client, use that as the default.
+  if (!state.batchClient && state.activeClient) {
+    state.batchClient = state.activeClient;
+    $("batch-client").value = state.batchClient;
+  }
+  renderBatchClientTaxonomy();
+  updateSummary();
+  setTimeout(() => { if (!state.batchClient) $("batch-client").focus(); }, 250);
+}
+function closeDrawer() { drawer.classList.remove("open"); scrim.classList.remove("open"); }
+
+// Wire the batch client input (script runs at end of body, DOM is ready).
+const _bcInput = $("batch-client");
+if (_bcInput) {
+  _bcInput.addEventListener("input", e => {
+    state.batchClient = e.target.value.trim();
+    updateSummary();
+  });
+}
+$("btn-open-drawer").onclick = openDrawer;
+$("btn-close-drawer").onclick = closeDrawer;
+scrim.onclick = closeDrawer;
+
+// Keyboard shortcuts
+const scOverlay = $("shortcut-overlay"), scScrim = $("shortcut-scrim");
+function openShortcuts() { scOverlay.classList.add("open"); scScrim.classList.add("open"); }
+function closeShortcuts() { scOverlay.classList.remove("open"); scScrim.classList.remove("open"); }
+$("help-fab").onclick = openShortcuts;
+$("shortcut-close").onclick = closeShortcuts;
+scScrim.onclick = closeShortcuts;
+
+document.addEventListener("keydown", e => {
+  // Ignore shortcuts when user is typing in an input / textarea / contenteditable
+  const inField = e.target.matches("input, textarea, [contenteditable='true']");
+  if (e.key === "Escape") {
+    if (scOverlay.classList.contains("open")) { closeShortcuts(); return; }
+    if (tablesDrawer.classList.contains("open")) { closeTablesDrawer(); return; }
+    if (deepDrawer.classList.contains("open")) { closeDeepDrawer(); return; }
+    if (drawer.classList.contains("open")) { closeDrawer(); return; }
+    if (state.previewing) { closePreview(); return; }
+    return;
+  }
+  if (inField) return;
+  if (e.key === "/") { e.preventDefault(); $("search").focus(); return; }
+  if (e.key === "?") { e.preventDefault(); scOverlay.classList.contains("open") ? closeShortcuts() : openShortcuts(); return; }
+  if (e.key.toLowerCase() === "d" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); openDrawer(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    if (drawer.classList.contains("open") && !$("apply").disabled) {
+      e.preventDefault(); $("apply").click();
+    }
+    return;
+  }
+});
+
+// drop zone
+const drop = $("drop"), fileInput = $("file");
+drop.onclick = e => {
+  // Skip synthetic clicks that bubble back from the hidden file input.
+  if (e.target.closest("input")) return;
+  fileInput.click();
+};
+["dragenter","dragover"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("hover"); }));
+["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("hover"); }));
+drop.addEventListener("drop", async ev => {
+  ev.preventDefault();
+  drop.classList.remove("hover");
+  if (ev.dataTransfer.items?.length && ev.dataTransfer.items[0].webkitGetAsEntry) {
+    const files = await readAllEntries(ev.dataTransfer.items);
+    addFiles(files);
+  } else addFiles(ev.dataTransfer.files);
+});
+fileInput.onchange = e => { addFiles(e.target.files); fileInput.value=""; };
+
+async function readAllEntries(items) {
+  const files = [];
+  async function walk(entry) {
+    if (entry.isFile) files.push(await new Promise((res, rej) => entry.file(res, rej)));
+    else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      while (true) {
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        if (!batch.length) break;
+        for (const e of batch) await walk(e);
+      }
+    }
+  }
+  const tasks = [];
+  for (const it of items) {
+    const entry = it.webkitGetAsEntry?.();
+    if (entry) tasks.push(walk(entry));
+    else if (it.getAsFile) { const f = it.getAsFile(); if (f) files.push(f); }
+  }
+  await Promise.all(tasks);
+  return files;
+}
+
+function addFiles(list) {
+  let added = 0;
+  // If we're currently viewing a specific client folder, every new row gets
+  // that client pre-filled — you don't have to retype for each file.
+  const contextClient = (state.activeCategory && state.activeCategory !== "__dup__" && state.activeCategory !== "__empty__")
+    ? state.activeCategory : "";
+  for (const f of list) {
+    if (!f.name || f.name.startsWith(".")) continue;
+    const id = "loc-" + Math.random().toString(36).slice(2, 10);
+    state.rows.set(id, {
+      id, file: f, name: f.name, size: f.size,
+      status: "queued", accepted: true, final_name: "",
+      client: contextClient,
+      clientLocked: !!contextClient,   // user's context takes priority over the model's guess
+    });
+    renderQueueRow(id);
+    added++;
+  }
+  if (added) {
+    drop.classList.add("compact");
+    updateSummary();
+    toast(`${added} sample${added !== 1 ? "s" : ""} queued${contextClient ? ` for <b>${esc(contextClient)}</b>` : ""}.`, "ok");
+  }
+}
+
+function hasBatchClient() {
+  return !!(state.batchClient && state.batchClient.trim() && state.batchClient.trim().toLowerCase() !== "unassigned");
+}
+
+function updateSummary() {
+  const arr = [...state.rows.values()];
+  const acceptedRows = arr.filter(r => r.accepted && (r.status === "ready" || r.status === "duplicate"));
+  const ready = acceptedRows.length;
+  const total = arr.length;
+  const bc = hasBatchClient();
+  let summary = `<b>${total}</b> queued  ·  <b>${ready}</b> ready to commit`;
+  if (!bc) summary += `  ·  <span style="color:var(--danger)">pick a client first</span>`;
+  $("drawer-summary").innerHTML = summary;
+  $("apply").disabled = ready === 0 || !bc;
+  $("apply").title = !bc ? "Pick a client at the top of the drawer first" : "";
+  $("process").disabled = !arr.some(r => r.status === "queued") || !bc;
+  $("process").title = !bc ? "Pick a client at the top of the drawer first" : "";
+  renderBatchClientTaxonomy();
+}
+
+function renderBatchClientTaxonomy() {
+  const box = $("batch-client-tax");
+  if (!box) return;
+  const hint = $("batch-client-hint");
+  const bc = state.batchClient;
+  if (!bc || !hasBatchClient()) {
+    box.innerHTML = "";
+    if (hint) { hint.textContent = "Required before triage"; hint.className = "bc-hint warn"; }
+    return;
+  }
+  const known = allClients().includes(bc);
+  if (hint) {
+    hint.textContent = known ? "" : "New client — will be created on commit";
+    hint.className = "bc-hint" + (known ? "" : " info");
+  }
+  const buckets = [...new Set([...bucketsFor(bc), "Unfiled"])];
+  box.innerHTML = `
+    <div class="bc-tax-label">Taxonomy</div>
+    <div class="bc-tax-pills">
+      ${buckets.map(b => `<span class="bc-tax-pill">${esc(b)}</span>`).join("")}
+      <button class="bc-tax-add" id="bc-tax-add">+ Add bucket</button>
+    </div>`;
+  $("bc-tax-add").onclick = async () => {
+    const name = prompt(`New bucket for ${bc}:`);
+    if (!name) return;
+    try {
+      const r = await fetch("/sorter/bucket/add", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({client: bc, bucket: name})
+      });
+      const d = await r.json();
+      if (!d.ok) { toast(d.error || "Invalid bucket name", "er"); return; }
+      await loadFiles();
+      renderBatchClientTaxonomy();
+    } catch { toast("Couldn't add bucket", "er"); }
+  };
+}
+
+function renderQueueRow(id) {
+  const r = state.rows.get(id);
+  let el = document.getElementById("row-" + id);
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "qrow"; el.id = "row-" + id;
+    el.innerHTML = `
+      <div class="check on" data-role="check"></div>
+      <div class="main">
+        <div class="top">
+          <div class="ofn" data-role="ofn"></div>
+          <div class="stat queued" data-role="stat"></div>
+          <button class="skip" data-role="skip" title="Remove">×</button>
+        </div>
+        <div class="bottom">
+          <input class="name-input" data-role="name" placeholder="—" disabled />
+          <input class="cat-input" data-role="bucket" placeholder="Bucket…" list="buckets-datalist" disabled />
+        </div>
+      </div>`;
+    $("queue").appendChild(el);
+    el.querySelector('[data-role="check"]').onclick = e => {
+      r.accepted = !r.accepted;
+      e.currentTarget.classList.toggle("on", r.accepted);
+      el.classList.toggle("accepted", r.accepted && (r.status === "ready" || r.status === "duplicate"));
+      el.classList.toggle("skipped", !r.accepted);
+      updateSummary();
+    };
+    el.querySelector('[data-role="name"]').oninput = e => r.final_name = e.target.value;
+    el.querySelector('[data-role="bucket"]').oninput = e => {
+      r.bucket = e.target.value;
+      r.bucketLocked = true;
+    };
+    el.querySelector('[data-role="skip"]').onclick = () => {
+      state.rows.delete(id); el.remove(); updateSummary();
+    };
+  }
+  qs('[data-role="ofn"]', el).textContent = r.name;
+  const statEl = qs('[data-role="stat"]', el);
+  statEl.className = "stat " + r.status;
+  const labelMap = {queued:"queued", hashing:"hashing", extracting:"reading layers", naming:"examining", ready:"ready", duplicate:"echo", error:"error", accepted:"deposited"};
+  let label = labelMap[r.status] || r.status;
+  if (r.status === "duplicate" && r.dup_of) label = `echo of ${r.dup_of}`;
+  statEl.textContent = label;
+  statEl.title = r.status === "duplicate" ? "This file is identical (byte-for-byte) to one already in the library. Approving it will add an echo record to the canonical file." : "";
+  const nameInput = qs('[data-role="name"]', el);
+  nameInput.value = r.final_name || "";
+  nameInput.disabled = !(r.status === "ready" || r.status === "duplicate" || r.status === "error" || r.status === "naming");
+  const bucketInput = qs('[data-role="bucket"]', el);
+  bucketInput.value = r.bucket || "";
+  bucketInput.disabled = !(r.status === "ready" || r.status === "duplicate");
+  el.classList.toggle("accepted", r.accepted && (r.status === "ready" || r.status === "duplicate"));
+  el.classList.toggle("skipped", !r.accepted);
+}
+
+
+$("process").onclick = async () => {
+  const queued = [...state.rows.values()].filter(r => r.status === "queued");
+  if (!queued.length) return;
+  $("process").disabled = true;
+
+  const fd = new FormData();
+  fd.append("batch_client", state.batchClient || "");
+  fd.append("llm_provider", state.llmProvider || "azure_openai");
+  const localIds = [];
+  for (const r of queued) {
+    fd.append("files", r.file, r.name);
+    localIds.push(r.id);
+    r.status = "hashing"; renderQueueRow(r.id);
+    r.client = state.batchClient;  // lock-in batch client for this row
+  }
+  updateSummary();
+
+  let resp;
+  try { resp = await fetch("/sorter/process", { method: "POST", body: fd }); }
+  catch { toast("Network error.", "er"); $("process").disabled = false; return; }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", serverIdx = -1;
+  const idMap = {};
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const raw = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!raw) continue;
+      let ev; try { ev = JSON.parse(raw); } catch { continue; }
+      handleStreamEvent(ev, localIds, idMap, s => serverIdx = s, () => serverIdx);
+    }
+  }
+  updateSummary();
+};
+
+function handleStreamEvent(ev, localIds, idMap, setIdx, getIdx) {
+  if (ev.type === "row_start") {
+    const newIdx = getIdx() + 1; setIdx(newIdx);
+    const local = localIds[newIdx];
+    idMap[ev.id] = local;
+    const r = state.rows.get(local);
+    r.server_id = ev.id; r.hash = ev.hash; r.status = "extracting";
+    renderQueueRow(local);
+  } else if (ev.type === "row_step") {
+    const r = state.rows.get(idMap[ev.id]); r.status = ev.step; renderQueueRow(idMap[ev.id]);
+  } else if (ev.type === "row_token") {
+    // LIVE-TYPING: append token to name input character by character
+    const local = idMap[ev.id];
+    const r = state.rows.get(local);
+    if (!r) return;
+    r.live_name = (r.live_name || "") + ev.tok;
+    // render the in-progress name in the input (sanitized snake_case approximation)
+    const approx = snakify(r.live_name);
+    r.final_name = approx;
+    const el = document.getElementById("row-" + local);
+    if (el) {
+      const inp = qs('[data-role="name"]', el);
+      inp.disabled = false;
+      inp.value = approx;
+      inp.classList.add("live");
+    }
+  } else if (ev.type === "row_done") {
+    const r = state.rows.get(idMap[ev.id]);
+    if (!r) return;
+    const gemmaClient = ev.client || "";
+    const newClient = r.clientLocked && r.client
+      ? r.client
+      : (gemmaClient && gemmaClient !== "Unassigned" ? gemmaClient : (r.client || ""));
+    const gemmaBucket = ev.bucket || "";
+    const newBucket = r.bucketLocked && r.bucket
+      ? r.bucket
+      : (gemmaBucket || (r.bucket || ""));
+    Object.assign(r, {
+      status: ev.status, suggested: ev.suggested, final_name: ev.suggested,
+      client: newClient,
+      bucket: newBucket,
+      gemma_bucket: gemmaBucket,
+      preview: ev.preview, dup_of: ev.dup_of, error: ev.error, temp_path: ev.temp_path,
+    });
+    const el = document.getElementById("row-" + idMap[ev.id]);
+    if (el) qs('[data-role="name"]', el).classList.remove("live");
+    renderQueueRow(idMap[ev.id]);
+  }
+  updateSummary();
+}
+
+function snakify(s) {
+  return (s||"").toLowerCase().replace(/[^a-z0-9_\-\s]/g, "").replace(/\s+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 80);
+}
+
+$("apply").onclick = async () => {
+  const decisions = [];
+  for (const r of state.rows.values()) {
+    if (!r.temp_path) continue;
+    if (!r.accepted) { decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"skip"}); continue; }
+    if (r.status === "duplicate") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"duplicate", dup_of:r.dup_of, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, gemma_suggested:r.suggested || "", preview:r.preview});
+    else if (r.status === "ready" || r.status === "error") decisions.push({id:r.server_id, temp_path:r.temp_path, original:r.name, hash:r.hash, status:"accept", final_name:r.final_name || r.suggested, client:state.batchClient, bucket:r.bucket, gemma_bucket:r.gemma_bucket, gemma_suggested:r.suggested || "", preview:r.preview});
+  }
+  if (!decisions.filter(d => d.status !== "skip").length) return;
+  $("apply").disabled = true;
+  const resp = await fetch("/sorter/apply", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({decisions}),
+  });
+  const data = await resp.json();
+  let ok = 0, echoes = 0;
+  const echoedCanonicals = new Set();
+  for (const res of data.results) {
+    if (res.ok && res.echoed_into) { echoes++; echoedCanonicals.add(res.echoed_into); }
+    else if (res.ok && !res.skipped) ok++;
+    if (res.ok && (res.final_path || res.echoed_into)) {
+      for (const r of state.rows.values()) if (r.server_id === res.id) { r.status = "accepted"; r.final_path = res.final_path; renderQueueRow(r.id); break; }
+    }
+  }
+  // Pick a message that actually tells the user what happened — especially
+  // in the case where everything was an echo (no grid changes, easy to miss).
+  let msg;
+  if (ok && echoes)   msg = `<b>${ok}</b> new ${ok!==1?"files":"file"} deposited  ·  <b>${echoes}</b> echo${echoes!==1?"es":""} recorded`;
+  else if (ok)        msg = `<b>${ok}</b> ${ok!==1?"files":"file"} settled into strata`;
+  else if (echoes)    msg = `All <b>${echoes}</b> ${echoes!==1?"files were duplicates":"file was a duplicate"} — recorded as echo${echoes!==1?"es":""} on existing documents`;
+  else                msg = `nothing to commit`;
+  toast(msg + ".", "ok", 5000);
+  await loadFiles();
+  // Briefly pulse every canonical card that just received an echo, so the
+  // user can see where their uploads landed.
+  if (echoedCanonicals.size) {
+    requestAnimationFrame(() => {
+      for (const name of echoedCanonicals) {
+        const card = document.querySelector(`.card[data-name="${CSS.escape(name)}"]`);
+        if (card) {
+          card.classList.add("just-echoed");
+          setTimeout(() => card.classList.remove("just-echoed"), 2400);
+        }
+      }
+    });
+  }
+  updateSummary();
+  $("apply").disabled = false;
+};
+
+// search
+$("search").oninput = e => {
+  state.search = e.target.value;
+  render();
+};
+
+// ══════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════
+(async () => {
+  await initProviderToggle();
+  const ok = await requireAuth();
+  if (ok) await loadFiles();
+  updateSummary();
+})();
+</script>
+</body>
+</html>

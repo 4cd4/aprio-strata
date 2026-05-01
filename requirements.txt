@@ -1,10 +1,13 @@
+azure-ai-documentintelligence
 azure-identity
+azure-monitor-opentelemetry
 azure-storage-blob
 fastapi
 httpx
 mineru[core]
 openpyxl
-psycopg[binary]
+pyodbc
 PyJWT[crypto]
+python-dotenv
 python-multipart
 uvicorn

@@ -3,15 +3,19 @@
 The module is intentionally import-safe when Azure dependencies are not yet
 installed. Azure mode only turns on when the required environment variables are
 present; otherwise the app keeps using the local manifest paths in ``sorter.py``.
+
+Database: Azure SQL via ``pyodbc`` with ``Authentication=ActiveDirectoryDefault``
+(managed identity in Container Apps, ``az login`` locally). All SQL is T-SQL.
 """
 from __future__ import annotations
 
-import base64
 import json
 import mimetypes
 import os
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +28,12 @@ import httpx
 DEFAULT_BUCKETS = ["Finance", "Tax", "Legal"]
 DEFAULT_CONTAINER = "firm-documents"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+ODBC_DRIVER = "ODBC Driver 18 for SQL Server"
+
+# Reuse a single HTTP client for all Graph and OAuth-token calls. New clients per
+# request would force a TLS handshake every time — Graph endpoints sit behind
+# global LB/CDN where keep-alive matters.
+_GRAPH_HTTP = httpx.Client(timeout=120, follow_redirects=True)
 
 
 @dataclass(frozen=True)
@@ -39,11 +49,21 @@ class AuthContext:
 class AzureStore:
     def __init__(self) -> None:
         self.tenant_id = os.environ.get("AZURE_TENANT_ID", "").strip()
-        self.client_id = os.environ.get("AZURE_CLIENT_ID", "").strip()
+        # AZURE_API_CLIENT_ID is the Strata API app registration (used for JWT
+        # audience checks and MSAL). AZURE_CLIENT_ID is reserved for the
+        # DefaultAzureCredential managed-identity hint and is read directly
+        # by azure-identity / msodbcsql18; we don't need to read it here.
+        # AZURE_CLIENT_ID is honored as a fallback for backward compatibility.
+        self.client_id = (
+            os.environ.get("AZURE_API_CLIENT_ID", "").strip()
+            or os.environ.get("AZURE_CLIENT_ID", "").strip()
+        )
         self.api_audience = os.environ.get("AZURE_API_AUDIENCE", self.client_id).strip()
         self.api_scope = os.environ.get("AZURE_API_SCOPE", f"api://{self.client_id}/access_as_user").strip()
         self.redirect_uri = os.environ.get("AZURE_REDIRECT_URI", "").strip()
-        self.postgres_dsn = os.environ.get("AZURE_POSTGRES_DSN", "").strip()
+        self.sql_server = os.environ.get("AZURE_SQL_SERVER", "").strip()
+        self.sql_database = os.environ.get("AZURE_SQL_DATABASE", "").strip()
+        self.sql_connection_string = os.environ.get("AZURE_SQL_CONNECTION_STRING", "").strip()
         self.storage_container = os.environ.get("AZURE_STORAGE_CONTAINER", DEFAULT_CONTAINER).strip()
         self.storage_connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", "").strip()
         self.storage_account_url = os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "").strip()
@@ -52,13 +72,19 @@ class AzureStore:
         self.graph_root_folder = os.environ.get("MICROSOFT_GRAPH_ROOT_FOLDER", "Strata").strip().strip("/")
         self.graph_client_id = os.environ.get("MICROSOFT_GRAPH_CLIENT_ID", self.client_id).strip()
         self.graph_client_secret = os.environ.get("MICROSOFT_GRAPH_CLIENT_SECRET", "").strip()
-        self._jwks: dict[str, Any] | None = None
-        self._jwks_at = 0.0
         self._graph_app_token: tuple[str, float] | None = None
+        self._jwk_client: Any | None = None
+        self._sql_credential: Any | None = None
+        self._tls_local = threading.local()
 
     @property
     def enabled(self) -> bool:
-        return bool(self.tenant_id and self.client_id and self.postgres_dsn)
+        return bool(self.tenant_id and self.client_id and self._sql_configured())
+
+    def _sql_configured(self) -> bool:
+        if self.sql_connection_string:
+            return True
+        return bool(self.sql_server and self.sql_database)
 
     def public_config(self) -> dict[str, Any]:
         return {
@@ -76,48 +102,130 @@ class AzureStore:
         if not self.enabled:
             raise RuntimeError("Azure integration is not configured")
 
+    # ------------------------------------------------------------------
+    # Database (Azure SQL via pyodbc)
+    # ------------------------------------------------------------------
+
+    def _connection_string(self) -> str:
+        if self.sql_connection_string:
+            return self.sql_connection_string
+        # No Authentication= here: msodbcsql18 on Linux doesn't support
+        # ActiveDirectoryDefault. We pass an AAD bearer token via the
+        # SQL_COPT_SS_ACCESS_TOKEN attribute below.
+        return (
+            f"Driver={{{ODBC_DRIVER}}};"
+            f"Server=tcp:{self.sql_server},1433;"
+            f"Database={self.sql_database};"
+            "Encrypt=yes;TrustServerCertificate=no;"
+            "Connection Timeout=30;"
+        )
+
+    def _aad_token_struct(self) -> bytes:
+        """Acquire an Entra access token for Azure SQL and pack it for ODBC.
+
+        msodbcsql18 expects the token as a UTF-16-LE byte string prefixed by a
+        little-endian uint32 length, passed via the connection attribute
+        ``SQL_COPT_SS_ACCESS_TOKEN`` (1256). DefaultAzureCredential picks up
+        the user-assigned MI in Container Apps (via AZURE_CLIENT_ID) and falls
+        through to az-cli auth locally.
+        """
+        try:
+            from azure.identity import DefaultAzureCredential
+        except ImportError as exc:
+            raise RuntimeError("Install azure-identity to use Entra auth for Azure SQL") from exc
+        if self._sql_credential is None:
+            self._sql_credential = DefaultAzureCredential()
+        token = self._sql_credential.get_token("https://database.windows.net/.default").token
+        token_bytes = token.encode("utf-16-le")
+        from struct import pack
+        return pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
+
     def _connect(self):
         self._check_enabled()
         try:
-            import psycopg
-            from psycopg.rows import dict_row
+            import pyodbc
         except ImportError as exc:
-            raise RuntimeError("Install psycopg[binary] to use Azure PostgreSQL") from exc
-        return psycopg.connect(self.postgres_dsn, row_factory=dict_row)
+            raise RuntimeError("Install pyodbc + msodbcsql18 to use Azure SQL") from exc
+        # 1256 = SQL_COPT_SS_ACCESS_TOKEN — msodbc connection attribute that
+        # accepts a pre-acquired AAD bearer token instead of user/pwd auth.
+        attrs = {1256: self._aad_token_struct()} if not self.sql_connection_string else None
+        conn = pyodbc.connect(self._connection_string(), autocommit=True, attrs_before=attrs)
+        firm_id = getattr(self._tls_local, "firm_id", None)
+        if firm_id:
+            with conn.cursor() as cur:
+                cur.execute("exec sys.sp_set_session_context @key = N'firm_id', @value = ?", firm_id)
+        return conn
 
-    def _query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+    @contextmanager
+    def session(self):
+        """Reuse a single SQL connection for every query inside the block.
+
+        ODBC connect + AAD auth costs hundreds of ms per call, so wrapping
+        multi-query methods (load_manifest, auth_context, ensure_*) in a session
+        collapses N round-trips into one. Nested ``session()`` calls are no-ops
+        and safely share the outermost connection.
+        """
+        if getattr(self._tls_local, "conn", None) is not None:
+            yield
+            return
+        conn = self._connect()
+        self._tls_local.conn = conn
+        try:
+            yield
+        finally:
+            self._tls_local.conn = None
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _rows_to_dicts(cursor) -> list[dict[str, Any]]:
+        if cursor.description is None:
+            return []
+        columns = [col[0] for col in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def _exec(self, sql: str, params: tuple[Any, ...], op):
+        conn = getattr(self._tls_local, "conn", None)
+        if conn is not None:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-                if cur.description is None:
-                    return []
-                return [dict(row) for row in cur.fetchall()]
+                return op(cur)
+        with self._connect() as c:
+            with c.cursor() as cur:
+                cur.execute(sql, params)
+                return op(cur)
+
+    def _query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        return self._exec(sql, params, self._rows_to_dicts)
 
     def _one(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         rows = self._query(sql, params)
         return rows[0] if rows else None
 
     def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
+        self._exec(sql, params, lambda _cur: None)
+
+    def use_firm(self, firm_id: str | None) -> None:
+        """Bind subsequent connections from this thread to a firm for RLS.
+
+        The schema's ``tenant_isolation`` security policy is created in OFF
+        state. Setting this value still issues ``sp_set_session_context`` on
+        every new connection so that flipping the policy to ON is a one-line
+        change with no application work required.
+        """
+        self._tls_local.firm_id = firm_id
+
+    # ------------------------------------------------------------------
+    # Microsoft Entra ID auth
+    # ------------------------------------------------------------------
 
     def _jwks_url(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
 
     def _issuer(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
-
-    def _jwks_payload(self) -> dict[str, Any]:
-        now = time.time()
-        if self._jwks and now - self._jwks_at < 3600:
-            return self._jwks
-        with httpx.Client(timeout=20) as client:
-            r = client.get(self._jwks_url())
-            r.raise_for_status()
-            self._jwks = r.json()
-            self._jwks_at = now
-            return self._jwks
 
     def _decode_token(self, token: str) -> dict[str, Any]:
         try:
@@ -126,8 +234,11 @@ class AzureStore:
         except ImportError as exc:
             raise RuntimeError("Install PyJWT[crypto] to validate Entra ID tokens") from exc
 
-        jwk_client = PyJWKClient(self._jwks_url())
-        signing_key = jwk_client.get_signing_key_from_jwt(token)
+        # PyJWKClient caches signing keys for its lifetime — instantiating it
+        # per request triggers a fresh JWKS fetch on every authenticated call.
+        if self._jwk_client is None:
+            self._jwk_client = PyJWKClient(self._jwks_url())
+        signing_key = self._jwk_client.get_signing_key_from_jwt(token)
         audiences = [a for a in {self.api_audience, self.client_id, f"api://{self.client_id}"} if a]
         last_error: Exception | None = None
         for audience in audiences:
@@ -155,10 +266,11 @@ class AzureStore:
         name = claims.get("name") or email
         if not user_id:
             raise PermissionError("Entra token did not include an object id")
-        profile = self._one(
-            "select id, firm_id, role, email, display_name from profiles where id = %s limit 1",
-            (user_id,),
-        )
+        with self.session():
+            profile = self._one(
+                "select top 1 id, firm_id, role, email, display_name from dbo.profiles where id = ?",
+                (user_id,),
+            )
         if not profile:
             raise LookupError("Azure user has no firm profile")
         return AuthContext(
@@ -181,38 +293,56 @@ class AzureStore:
         name = claims.get("name") or email
         if not user_id:
             raise PermissionError("Entra token did not include an object id")
-        existing = self._one("select id, firm_id, role, email, display_name from profiles where id = %s limit 1", (user_id,))
-        if existing:
-            return AuthContext(
-                user_id=user_id,
-                email=email or existing.get("email") or "",
-                firm_id=str(existing["firm_id"]),
-                role=existing.get("role") or "member",
-                name=name or existing.get("display_name") or "",
-                access_token=token,
+        with self.session():
+            existing = self._one(
+                "select top 1 id, firm_id, role, email, display_name from dbo.profiles where id = ?",
+                (user_id,),
             )
-        firm = self._one(
-            "insert into firms (name) values (%s) returning id, name",
-            ((firm_name or "My Firm").strip() or "My Firm",),
-        )
-        assert firm is not None
-        self._execute(
-            """
-            insert into profiles (id, firm_id, email, display_name, role)
-            values (%s, %s, %s, %s, 'owner')
-            """,
-            (user_id, firm["id"], email, name),
-        )
+            if existing:
+                return AuthContext(
+                    user_id=user_id,
+                    email=email or existing.get("email") or "",
+                    firm_id=str(existing["firm_id"]),
+                    role=existing.get("role") or "member",
+                    name=name or existing.get("display_name") or "",
+                    access_token=token,
+                )
+            firm = self._one(
+                "insert into dbo.firms (name) output inserted.id, inserted.name values (?)",
+                ((firm_name or "My Firm").strip() or "My Firm",),
+            )
+            assert firm is not None
+            self._execute(
+                "insert into dbo.profiles (id, firm_id, email, display_name, role) values (?, ?, ?, ?, 'owner')",
+                (user_id, firm["id"], email, name),
+            )
         return AuthContext(user_id=user_id, email=email, firm_id=str(firm["id"]), role="owner", name=name, access_token=token)
+
+    # ------------------------------------------------------------------
+    # Clients / buckets (taxonomy)
+    # ------------------------------------------------------------------
 
     def ensure_client(self, firm_id: str, name: str) -> dict[str, Any] | None:
         if not name or name == "Unassigned":
             return None
-        row = self._one("select * from clients where firm_id = %s and name = %s limit 1", (firm_id, name))
+        row = self._one(
+            "select top 1 * from dbo.clients where firm_id = ? and name = ?",
+            (firm_id, name),
+        )
         if row:
             return row
+        # MERGE pattern is fine here: the unique (firm_id, name) constraint
+        # backstops any race between concurrent inserts.
         return self._one(
-            "insert into clients (firm_id, name) values (%s, %s) on conflict (firm_id, name) do update set name = excluded.name returning *",
+            """
+            merge into dbo.clients with (holdlock) as target
+            using (select cast(? as uniqueidentifier) as firm_id, cast(? as nvarchar(255)) as name) as source
+              on  target.firm_id = source.firm_id
+              and target.name    = source.name
+            when matched then update set name = source.name
+            when not matched then insert (firm_id, name) values (source.firm_id, source.name)
+            output inserted.*;
+            """,
             (firm_id, name),
         )
 
@@ -220,17 +350,24 @@ class AzureStore:
         if not client_id or not name or name == "Unfiled":
             return None
         row = self._one(
-            "select * from buckets where firm_id = %s and client_id = %s and name = %s limit 1",
+            "select top 1 * from dbo.buckets where firm_id = ? and client_id = ? and name = ?",
             (firm_id, client_id, name),
         )
         if row:
             return row
         return self._one(
             """
-            insert into buckets (firm_id, client_id, name)
-            values (%s, %s, %s)
-            on conflict (firm_id, client_id, name) do update set name = excluded.name
-            returning *
+            merge into dbo.buckets with (holdlock) as target
+            using (select cast(? as uniqueidentifier) as firm_id,
+                          cast(? as uniqueidentifier) as client_id,
+                          cast(? as nvarchar(255))    as name) as source
+              on  target.firm_id   = source.firm_id
+              and target.client_id = source.client_id
+              and target.name      = source.name
+            when matched then update set name = source.name
+            when not matched then insert (firm_id, client_id, name)
+              values (source.firm_id, source.client_id, source.name)
+            output inserted.*;
             """,
             (firm_id, client_id, name),
         )
@@ -241,19 +378,27 @@ class AzureStore:
         rows = self._query(
             """
             select b.name
-            from buckets b
-            join clients c on c.id = b.client_id
-            where b.firm_id = %s and c.name = %s
-            order by b.name asc
+              from dbo.buckets b
+              join dbo.clients c on c.id = b.client_id
+             where b.firm_id = ?
+               and c.name    = ?
+             order by b.name asc
             """,
             (firm_id, client),
         )
         names = [r["name"] for r in rows]
         return names or list(DEFAULT_BUCKETS)
 
+    # ------------------------------------------------------------------
+    # Manifest aggregation
+    # ------------------------------------------------------------------
+
     def load_manifest(self, firm_id: str) -> dict[str, Any]:
-        docs = self._query("select * from documents where firm_id = %s order by applied_at desc", (firm_id,))
-        echoes = self._query("select * from document_echoes where firm_id = %s order by uploaded_at desc", (firm_id,))
+        with self.session():
+            docs = self._query("select * from dbo.documents where firm_id = ? order by applied_at desc", (firm_id,))
+            echoes = self._query("select * from dbo.document_echoes where firm_id = ? order by uploaded_at desc", (firm_id,))
+            clients = self._query("select id, name from dbo.clients where firm_id = ? order by name asc", (firm_id,))
+            buckets = self._query("select client_id, name from dbo.buckets where firm_id = ? order by name asc", (firm_id,))
         by_doc: dict[str, list[dict[str, Any]]] = {}
         for echo in echoes:
             by_doc.setdefault(str(echo["document_id"]), []).append({
@@ -261,8 +406,6 @@ class AzureStore:
                 "uploaded_at": _iso(echo.get("uploaded_at")),
                 "source": echo.get("source") or "deposit",
             })
-        clients = self._query("select id, name from clients where firm_id = %s order by name asc", (firm_id,))
-        buckets = self._query("select client_id, name from buckets where firm_id = %s order by name asc", (firm_id,))
         client_by_id = {str(c["id"]): c["name"] for c in clients}
         taxonomies: dict[str, list[str]] = {c["name"]: [] for c in clients}
         for bucket in buckets:
@@ -289,6 +432,10 @@ class AzureStore:
                 "size": doc.get("size"),
             })
         return {"files": files, "clients": [c["name"] for c in clients], "client_taxonomies": taxonomies}
+
+    # ------------------------------------------------------------------
+    # Blob storage
+    # ------------------------------------------------------------------
 
     def blob_client(self, storage_path: str):
         try:
@@ -336,13 +483,25 @@ class AzureStore:
             content_type="application/json",
         )
 
+    def write_bytes_blob(self, storage_path: str, data: bytes, *, content_type: str | None = None) -> None:
+        blob = self.blob_client(storage_path)
+        ct = content_type or mimetypes.guess_type(storage_path)[0] or "application/octet-stream"
+        blob.upload_blob(data, overwrite=True, content_type=ct)
+
     def file_url(self, storage_path: str) -> str | None:
         if not storage_path:
             return None
         return f"/sorter/blob/{quote(storage_path, safe='')}"
 
+    # ------------------------------------------------------------------
+    # Documents
+    # ------------------------------------------------------------------
+
     def _remote_name_available(self, firm_id: str, final_name: str) -> bool:
-        row = self._one("select id from documents where firm_id = %s and final_name = %s limit 1", (firm_id, final_name))
+        row = self._one(
+            "select top 1 id from dbo.documents where firm_id = ? and final_name = ?",
+            (firm_id, final_name),
+        )
         return row is None
 
     def resolve_remote_name(self, firm_id: str, stem: str, ext: str) -> str:
@@ -370,60 +529,70 @@ class AzureStore:
         gemma_bucket: str | None,
         gemma_suggested: str | None,
     ) -> dict[str, Any]:
-        final_name = self.resolve_remote_name(ctx.firm_id, stem, ext)
-        doc_id = str(uuid.uuid4())
-        storage_path = f"{ctx.firm_id}/{doc_id}/{final_name}"
-        data = src.read_bytes()
-        content_type = mimetypes.guess_type(final_name)[0] or "application/octet-stream"
-        blob = self.blob_client(storage_path)
-        blob.upload_blob(data, overwrite=False, content_type=content_type)
-        graph_ref = self.export_file_to_graph(ctx, src, final_name, client_name, bucket_name)
-        client_row = self.ensure_client(ctx.firm_id, client_name)
-        bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, bucket_name)
-        doc = self._one(
-            """
-            insert into documents (
-              id, firm_id, hash, original, final_name, client_id, bucket_id,
-              client_name, bucket_name, gemma_bucket, gemma_suggested,
-              storage_bucket, storage_path, graph_drive_id, graph_item_id, size, created_by
+        with self.session():
+            final_name = self.resolve_remote_name(ctx.firm_id, stem, ext)
+            doc_id = str(uuid.uuid4())
+            storage_path = f"{ctx.firm_id}/{doc_id}/{final_name}"
+            data = src.read_bytes()
+            content_type = mimetypes.guess_type(final_name)[0] or "application/octet-stream"
+            blob = self.blob_client(storage_path)
+            blob.upload_blob(data, overwrite=False, content_type=content_type)
+            graph_ref = self.export_file_to_graph(
+                ctx, src, final_name, client_name, bucket_name, data=data
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            returning *
-            """,
-            (
-                doc_id,
-                ctx.firm_id,
-                file_hash,
-                original,
-                final_name,
-                client_row["id"] if client_row else None,
-                bucket_row["id"] if bucket_row else None,
-                client_name,
-                bucket_name,
-                gemma_bucket,
-                gemma_suggested,
-                self.storage_container,
-                storage_path,
-                graph_ref.get("drive_id"),
-                graph_ref.get("item_id"),
-                len(data),
-                ctx.user_id,
-            ),
-        )
+            client_row = self.ensure_client(ctx.firm_id, client_name)
+            bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, bucket_name)
+            doc = self._one(
+                """
+                insert into dbo.documents (
+                  id, firm_id, hash, original, final_name, client_id, bucket_id,
+                  client_name, bucket_name, gemma_bucket, gemma_suggested,
+                  storage_bucket, storage_path, graph_drive_id, graph_item_id, size, created_by
+                )
+                output inserted.*
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    doc_id,
+                    ctx.firm_id,
+                    file_hash,
+                    original,
+                    final_name,
+                    client_row["id"] if client_row else None,
+                    bucket_row["id"] if bucket_row else None,
+                    client_name,
+                    bucket_name,
+                    gemma_bucket,
+                    gemma_suggested,
+                    self.storage_container,
+                    storage_path,
+                    graph_ref.get("drive_id"),
+                    graph_ref.get("item_id"),
+                    len(data),
+                    ctx.user_id,
+                ),
+            )
         assert doc is not None
         return doc
 
     def find_document_by_hash(self, firm_id: str, file_hash: str) -> dict[str, Any] | None:
-        return self._one("select * from documents where firm_id = %s and hash = %s limit 1", (firm_id, file_hash))
+        return self._one(
+            "select top 1 * from dbo.documents where firm_id = ? and hash = ?",
+            (firm_id, file_hash),
+        )
 
     def add_echo(self, ctx: AuthContext, document_id: str, original: str) -> None:
         self._execute(
             """
-            insert into document_echoes (firm_id, document_id, original, source, created_by)
-            values (%s, %s, %s, 'deposit', %s)
+            insert into dbo.document_echoes (firm_id, document_id, original, source, created_by)
+            values (?, ?, ?, 'deposit', ?)
             """,
             (ctx.firm_id, document_id, original, ctx.user_id),
         )
+
+    # ------------------------------------------------------------------
+    # Finance extraction
+    # ------------------------------------------------------------------
 
     def save_financial_extraction(self, ctx: AuthContext, document_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
         artifact_path = f"{ctx.firm_id}/{document_id}/financial_extract.json"
@@ -431,19 +600,36 @@ class AzureStore:
         summary = artifact.get("summary") or {}
         row = self._one(
             """
-            insert into financial_extractions (
-              firm_id, document_id, status, artifact_bucket, artifact_path,
-              row_count, pending_rows, approved_rows, created_by, updated_at
+            merge into dbo.financial_extractions with (holdlock) as target
+            using (
+              select
+                cast(? as uniqueidentifier) as firm_id,
+                cast(? as uniqueidentifier) as document_id,
+                cast(? as nvarchar(64))     as status,
+                cast(? as nvarchar(255))    as artifact_bucket,
+                cast(? as nvarchar(1024))   as artifact_path,
+                cast(? as int)              as row_count,
+                cast(? as int)              as pending_rows,
+                cast(? as int)              as approved_rows,
+                cast(? as nvarchar(64))     as created_by
+            ) as source
+              on target.firm_id = source.firm_id and target.document_id = source.document_id
+            when matched then update set
+                status         = source.status,
+                artifact_path  = source.artifact_path,
+                row_count      = source.row_count,
+                pending_rows   = source.pending_rows,
+                approved_rows  = source.approved_rows,
+                updated_at     = sysdatetimeoffset()
+            when not matched then insert (
+                firm_id, document_id, status, artifact_bucket, artifact_path,
+                row_count, pending_rows, approved_rows, created_by, updated_at
+            ) values (
+                source.firm_id, source.document_id, source.status, source.artifact_bucket,
+                source.artifact_path, source.row_count, source.pending_rows,
+                source.approved_rows, source.created_by, sysdatetimeoffset()
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (firm_id, document_id) do update set
-              status = excluded.status,
-              artifact_path = excluded.artifact_path,
-              row_count = excluded.row_count,
-              pending_rows = excluded.pending_rows,
-              approved_rows = excluded.approved_rows,
-              updated_at = now()
-            returning *
+            output inserted.*;
             """,
             (
                 ctx.firm_id,
@@ -462,7 +648,7 @@ class AzureStore:
 
     def get_financial_extraction(self, ctx: AuthContext, document_id: str) -> dict[str, Any] | None:
         row = self._one(
-            "select * from financial_extractions where firm_id = %s and document_id = %s limit 1",
+            "select top 1 * from dbo.financial_extractions where firm_id = ? and document_id = ?",
             (ctx.firm_id, document_id),
         )
         if not row:
@@ -473,10 +659,10 @@ class AzureStore:
         rows = self._query(
             """
             select fe.*, d.final_name, d.client_name, d.bucket_name
-            from financial_extractions fe
-            join documents d on d.id = fe.document_id
-            where fe.firm_id = %s
-            order by fe.updated_at desc
+              from dbo.financial_extractions fe
+              join dbo.documents d on d.id = fe.document_id
+             where fe.firm_id = ?
+             order by fe.updated_at desc
             """,
             (ctx.firm_id,),
         )
@@ -498,88 +684,134 @@ class AzureStore:
             for row in rows
         ]
 
+    # ------------------------------------------------------------------
+    # Mutations
+    # ------------------------------------------------------------------
+
     def update_document_bucket(self, ctx: AuthContext, final_name: str, bucket_name: str) -> dict[str, Any] | None:
-        doc = self._one("select * from documents where firm_id = %s and final_name = %s limit 1", (ctx.firm_id, final_name))
-        if not doc:
-            return None
-        client_row = self.ensure_client(ctx.firm_id, doc.get("client_name") or "Unassigned")
-        bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, bucket_name)
-        return self._one(
-            """
-            update documents
-            set bucket_id = %s, bucket_name = %s
-            where firm_id = %s and final_name = %s
-            returning *
-            """,
-            (bucket_row["id"] if bucket_row else None, bucket_name, ctx.firm_id, final_name),
-        )
+        with self.session():
+            doc = self._one(
+                "select top 1 * from dbo.documents where firm_id = ? and final_name = ?",
+                (ctx.firm_id, final_name),
+            )
+            if not doc:
+                return None
+            client_row = self.ensure_client(ctx.firm_id, doc.get("client_name") or "Unassigned")
+            bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, bucket_name)
+            return self._one(
+                """
+                update dbo.documents
+                   set bucket_id   = ?,
+                       bucket_name = ?
+                 output inserted.*
+                 where firm_id    = ?
+                   and final_name = ?
+                """,
+                (bucket_row["id"] if bucket_row else None, bucket_name, ctx.firm_id, final_name),
+            )
 
     def update_document_client(self, ctx: AuthContext, final_name: str, client_name: str) -> dict[str, Any] | None:
-        doc = self._one("select * from documents where firm_id = %s and final_name = %s limit 1", (ctx.firm_id, final_name))
-        if not doc:
-            return None
-        client_row = self.ensure_client(ctx.firm_id, client_name)
-        bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, doc.get("bucket_name") or "Unfiled")
-        return self._one(
-            """
-            update documents
-            set client_id = %s, bucket_id = %s, client_name = %s
-            where firm_id = %s and final_name = %s
-            returning *
-            """,
-            (client_row["id"] if client_row else None, bucket_row["id"] if bucket_row else None, client_name, ctx.firm_id, final_name),
-        )
+        with self.session():
+            doc = self._one(
+                "select top 1 * from dbo.documents where firm_id = ? and final_name = ?",
+                (ctx.firm_id, final_name),
+            )
+            if not doc:
+                return None
+            client_row = self.ensure_client(ctx.firm_id, client_name)
+            bucket_row = self.ensure_bucket(ctx.firm_id, str(client_row["id"]) if client_row else None, doc.get("bucket_name") or "Unfiled")
+            return self._one(
+                """
+                update dbo.documents
+                   set client_id   = ?,
+                       bucket_id   = ?,
+                       client_name = ?
+                 output inserted.*
+                 where firm_id    = ?
+                   and final_name = ?
+                """,
+                (client_row["id"] if client_row else None, bucket_row["id"] if bucket_row else None, client_name, ctx.firm_id, final_name),
+            )
 
     def rename_document(self, ctx: AuthContext, final_name: str, new_final_name: str) -> dict[str, Any] | None:
-        doc = self._one("select * from documents where firm_id = %s and final_name = %s limit 1", (ctx.firm_id, final_name))
-        if not doc:
-            return None
-        old_path = doc.get("storage_path") or ""
-        new_path = "/".join(old_path.split("/")[:-1] + [new_final_name]) if old_path else ""
-        if old_path and new_path != old_path:
-            src = self.blob_client(old_path)
-            dst = self.blob_client(new_path)
-            data = src.download_blob().readall()
-            content_type = mimetypes.guess_type(new_final_name)[0] or "application/octet-stream"
-            dst.upload_blob(data, overwrite=False, content_type=content_type)
-            src.delete_blob()
-        return self._one(
-            """
-            update documents
-            set final_name = %s, storage_path = coalesce(nullif(%s, ''), storage_path)
-            where firm_id = %s and final_name = %s
-            returning *
-            """,
-            (new_final_name, new_path, ctx.firm_id, final_name),
-        )
+        with self.session():
+            doc = self._one(
+                "select top 1 * from dbo.documents where firm_id = ? and final_name = ?",
+                (ctx.firm_id, final_name),
+            )
+            if not doc:
+                return None
+            old_path = doc.get("storage_path") or ""
+            new_path = "/".join(old_path.split("/")[:-1] + [new_final_name]) if old_path else ""
+            if old_path and new_path != old_path:
+                src = self.blob_client(old_path)
+                dst = self.blob_client(new_path)
+                data = src.download_blob().readall()
+                content_type = mimetypes.guess_type(new_final_name)[0] or "application/octet-stream"
+                dst.upload_blob(data, overwrite=False, content_type=content_type)
+                src.delete_blob()
+            return self._one(
+                """
+                update dbo.documents
+                   set final_name   = ?,
+                       storage_path = coalesce(nullif(?, ''), storage_path)
+                 output inserted.*
+                 where firm_id    = ?
+                   and final_name = ?
+                """,
+                (new_final_name, new_path, ctx.firm_id, final_name),
+            )
 
     def remove_client(self, ctx: AuthContext, name: str) -> None:
         self._execute(
-            "update documents set client_id = null, client_name = 'Unassigned' where firm_id = %s and client_name = %s",
+            """
+            update dbo.documents
+               set client_id   = null,
+                   client_name = 'Unassigned'
+             where firm_id     = ?
+               and client_name = ?
+            """,
             (ctx.firm_id, name),
         )
-        self._execute("delete from clients where firm_id = %s and name = %s", (ctx.firm_id, name))
+        self._execute(
+            "delete from dbo.clients where firm_id = ? and name = ?",
+            (ctx.firm_id, name),
+        )
 
     def remove_bucket(self, ctx: AuthContext, client: str, bucket: str) -> bool:
-        in_use = self._one(
-            "select id from documents where firm_id = %s and client_name = %s and bucket_name = %s limit 1",
-            (ctx.firm_id, client, bucket),
-        )
-        if in_use:
-            return False
-        client_row = self._one("select id from clients where firm_id = %s and name = %s limit 1", (ctx.firm_id, client))
-        if client_row:
-            self._execute(
-                "delete from buckets where firm_id = %s and client_id = %s and name = %s",
-                (ctx.firm_id, client_row["id"], bucket),
+        with self.session():
+            in_use = self._one(
+                """
+                select top 1 id from dbo.documents
+                 where firm_id     = ?
+                   and client_name = ?
+                   and bucket_name = ?
+                """,
+                (ctx.firm_id, client, bucket),
             )
+            if in_use:
+                return False
+            client_row = self._one(
+                "select top 1 id from dbo.clients where firm_id = ? and name = ?",
+                (ctx.firm_id, client),
+            )
+            if client_row:
+                self._execute(
+                    "delete from dbo.buckets where firm_id = ? and client_id = ? and name = ?",
+                    (ctx.firm_id, client_row["id"], bucket),
+                )
         return True
 
+    # ------------------------------------------------------------------
+    # Analyst events
+    # ------------------------------------------------------------------
+
     def log_event(self, ctx: AuthContext, event: dict[str, Any]) -> None:
+        at = event.get("at") or datetime.now(timezone.utc)
         self._execute(
             """
-            insert into analyst_events (firm_id, user_id, event, file, hash, client, payload, at)
-            values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+            insert into dbo.analyst_events (firm_id, user_id, event, [file], hash, client, payload, at)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ctx.firm_id,
@@ -589,17 +821,22 @@ class AzureStore:
                 event.get("hash"),
                 event.get("client") or event.get("to_client") or event.get("from_client"),
                 json.dumps(event),
-                event.get("at") or datetime.now(timezone.utc),
+                at,
             ),
         )
 
     def analyst_events(self, firm_id: str) -> list[dict[str, Any]]:
-        rows = self._query("select * from analyst_events where firm_id = %s order by at asc", (firm_id,))
+        rows = self._query(
+            "select * from dbo.analyst_events where firm_id = ? order by at asc",
+            (firm_id,),
+        )
         out: list[dict[str, Any]] = []
         for row in rows:
-            payload = row.get("payload") or {}
-            if isinstance(payload, str):
-                payload = json.loads(payload)
+            payload_raw = row.get("payload") or "{}"
+            try:
+                payload = json.loads(payload_raw) if isinstance(payload_raw, str) else dict(payload_raw)
+            except json.JSONDecodeError:
+                payload = {}
             payload.setdefault("event", row.get("event"))
             payload.setdefault("at", _iso(row.get("at")))
             payload.setdefault("file", row.get("file"))
@@ -607,6 +844,10 @@ class AzureStore:
             payload.setdefault("client", row.get("client"))
             out.append(payload)
         return out
+
+    # ------------------------------------------------------------------
+    # Microsoft Graph
+    # ------------------------------------------------------------------
 
     def _graph_headers(self, ctx: AuthContext | None = None, graph_token: str | None = None) -> dict[str, str]:
         token = graph_token or self._graph_app_access_token() or (ctx.access_token if ctx else "")
@@ -620,18 +861,18 @@ class AzureStore:
         now = time.time()
         if self._graph_app_token and self._graph_app_token[1] > now + 60:
             return self._graph_app_token[0]
-        with httpx.Client(timeout=30) as client:
-            r = client.post(
-                f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token",
-                data={
-                    "client_id": self.graph_client_id,
-                    "client_secret": self.graph_client_secret,
-                    "grant_type": "client_credentials",
-                    "scope": "https://graph.microsoft.com/.default",
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
+        r = _GRAPH_HTTP.post(
+            f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": self.graph_client_id,
+                "client_secret": self.graph_client_secret,
+                "grant_type": "client_credentials",
+                "scope": "https://graph.microsoft.com/.default",
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
         token = data["access_token"]
         self._graph_app_token = (token, now + int(data.get("expires_in", 3600)))
         return token
@@ -648,6 +889,8 @@ class AzureStore:
         client_name: str,
         bucket_name: str,
         graph_token: str | None = None,
+        *,
+        data: bytes | None = None,
     ) -> dict[str, str | None]:
         if not self.graph_drive_id:
             return {"drive_id": None, "item_id": None}
@@ -655,23 +898,33 @@ class AzureStore:
         url = f"{GRAPH_BASE}/drives/{self.graph_drive_id}/root:/{graph_path}:/content"
         headers = self._graph_headers(ctx, graph_token)
         headers["Content-Type"] = mimetypes.guess_type(final_name)[0] or "application/octet-stream"
-        with httpx.Client(timeout=120) as client:
-            r = client.put(url, headers=headers, content=src.read_bytes())
-            r.raise_for_status()
-            item = r.json()
+        body = data if data is not None else src.read_bytes()
+        r = _GRAPH_HTTP.put(url, headers=headers, content=body)
+        r.raise_for_status()
+        item = r.json()
         return {"drive_id": item.get("parentReference", {}).get("driveId") or self.graph_drive_id, "item_id": item.get("id")}
 
     def graph_import_file(self, ctx: AuthContext, item_id: str, graph_token: str | None = None) -> dict[str, Any]:
         if not self.graph_drive_id:
             raise RuntimeError("MICROSOFT_GRAPH_DRIVE_ID is not configured")
         headers = self._graph_headers(ctx, graph_token)
-        with httpx.Client(timeout=120, follow_redirects=True) as client:
-            meta = client.get(f"{GRAPH_BASE}/drives/{self.graph_drive_id}/items/{item_id}", headers=headers)
-            meta.raise_for_status()
-            item = meta.json()
-            content = client.get(f"{GRAPH_BASE}/drives/{self.graph_drive_id}/items/{item_id}/content", headers=headers)
-            content.raise_for_status()
+        meta = _GRAPH_HTTP.get(f"{GRAPH_BASE}/drives/{self.graph_drive_id}/items/{item_id}", headers=headers)
+        meta.raise_for_status()
+        item = meta.json()
+        content = _GRAPH_HTTP.get(f"{GRAPH_BASE}/drives/{self.graph_drive_id}/items/{item_id}/content", headers=headers)
+        content.raise_for_status()
         return {"name": item.get("name") or item_id, "bytes": content.content, "graph_item_id": item_id, "graph_drive_id": self.graph_drive_id}
+
+    # ------------------------------------------------------------------
+    # Health
+    # ------------------------------------------------------------------
+
+    def ping_db(self) -> None:
+        """Probe the database; raises if unreachable. Used by /readyz."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select 1")
+                cur.fetchone()
 
 
 def _iso(value: Any) -> str | None:

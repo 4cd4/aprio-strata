@@ -6,12 +6,15 @@ keeps every extracted value traceable to a page/table/column.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import hashlib
 import io
 import json
 import os
 import re
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,6 +82,137 @@ async def run_mineru_full(in_path: Path, out_dir: Path, backend: str = "pipeline
     return await run_mineru_job(in_path, out_dir, backend=backend)
 
 
+# In-process LRU cache: parsing the same PDF twice (e.g. one user clicks the
+# Markdown view then the Excel export) used to re-run MinerU end-to-end.
+# Keyed by (sha256, backend); values hold the loaded markdown + content_list so
+# the per-request work_dir can be discarded after the cache write.
+_PARSE_CACHE_MAX = 8
+_parse_cache: "OrderedDict[tuple[str, str], dict[str, Any]]" = OrderedDict()
+_parse_cache_lock = asyncio.Lock()
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def parse_document(
+    src: Path,
+    *,
+    work_dir: Path,
+    backend: str,
+    file_hash: str | None = None,
+) -> dict[str, Any]:
+    """Run MinerU once per (file content, backend); subsequent calls hit cache.
+
+    The returned dict carries the loaded markdown text and content_list rather
+    than just paths, so callers don't have to keep the work_dir alive.
+    """
+    digest = (file_hash or _file_sha256(src)).strip().lower()
+    key = (digest, backend or "")
+    async with _parse_cache_lock:
+        cached = _parse_cache.get(key)
+        if cached is not None:
+            _parse_cache.move_to_end(key)
+            return cached
+    parse = await run_mineru_full(src, work_dir, backend=backend or "pipeline")
+    md_path = parse.get("markdown_path")
+    cl_path = parse.get("content_list_path")
+    payload: dict[str, Any] = {
+        "exit_code": parse.get("exit_code"),
+        "error": parse.get("error"),
+        "backend": backend,
+        "markdown": md_path.read_text(encoding="utf-8", errors="replace") if md_path else "",
+        "content_list": _read_content_list(cl_path),
+        "markdown_path": str(md_path) if md_path else None,
+        "content_list_path": str(cl_path) if cl_path else None,
+    }
+    async with _parse_cache_lock:
+        _parse_cache[key] = payload
+        _parse_cache.move_to_end(key)
+        while len(_parse_cache) > _PARSE_CACHE_MAX:
+            _parse_cache.popitem(last=False)
+    return payload
+
+
+def pdf_page_count(path: Path) -> int:
+    """Cheap page count via pypdfium2 (bundled with mineru[core])."""
+    try:
+        import pypdfium2 as pdfium  # type: ignore[import-not-found]
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            return len(pdf)
+        finally:
+            pdf.close()
+    except Exception:
+        return 0
+
+
+_METRICS_FILENAME = ".deep_extract_metrics.json"
+_METRICS_DEFAULT_SEC_PER_PAGE = 8.0
+# Until metrics exist, VLM backends are assumed much slower per page than layout ``pipeline``.
+_METRICS_DEFAULT_SEC_PER_PAGE_VLM = 42.0
+_METRICS_MAX_SAMPLES = 50
+
+
+def _metrics_path() -> Path:
+    base = Path(__file__).resolve().parent
+    return base / "sorted" / _METRICS_FILENAME
+
+
+def _load_metrics() -> dict[str, dict[str, float]]:
+    p = _metrics_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def avg_seconds_per_page(backend: str) -> float:
+    """Calibrated average seconds/page for ``backend`` (or default if no samples)."""
+    m = _load_metrics().get(backend) or {}
+    val = m.get("avg_sec_per_page")
+    if isinstance(val, (int, float)) and val > 0:
+        return float(val)
+    b = (backend or "").lower()
+    if "vlm" in b:
+        return _METRICS_DEFAULT_SEC_PER_PAGE_VLM
+    return _METRICS_DEFAULT_SEC_PER_PAGE
+
+
+def record_completion(backend: str, *, elapsed_seconds: float, pages: int) -> None:
+    """Update the rolling average for ``backend`` after a successful parse."""
+    if pages <= 0 or elapsed_seconds <= 0:
+        return
+    sec_per_page = elapsed_seconds / pages
+    p = _metrics_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = _load_metrics()
+    entry = data.get(backend) or {}
+    samples = int(entry.get("samples") or 0)
+    avg = float(entry.get("avg_sec_per_page") or 0.0)
+    new_samples = min(samples + 1, _METRICS_MAX_SAMPLES)
+    new_avg = ((avg * samples) + sec_per_page) / new_samples if new_samples else sec_per_page
+    data[backend] = {
+        "avg_sec_per_page": round(new_avg, 3),
+        "samples": new_samples,
+        "last_sec_per_page": round(sec_per_page, 3),
+        "last_pages": int(pages),
+        "last_elapsed": round(float(elapsed_seconds), 2),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 async def extract_financial_statements(
     src: Path,
     *,
@@ -88,11 +222,12 @@ async def extract_financial_statements(
     bucket: str,
     file_hash: str | None,
     work_dir: Path,
+    backend: str | None = None,
 ) -> dict[str, Any]:
-    parse = await run_mineru_full(src, work_dir)
-    md_path = parse["markdown_path"]
-    markdown = md_path.read_text(encoding="utf-8", errors="replace") if md_path else ""
-    content_list = _read_content_list(parse["content_list_path"])
+    b = (backend or os.environ.get("MINERU_DEEP_BACKEND") or "hybrid-auto-engine").strip() or "hybrid-auto-engine"
+    parsed = await parse_document(src, work_dir=work_dir, backend=b, file_hash=file_hash)
+    markdown = parsed["markdown"]
+    content_list = parsed["content_list"]
     rows = extract_rows_from_markdown(
         markdown,
         document_id=document_id,
@@ -112,9 +247,10 @@ async def extract_financial_statements(
         "created_at": now,
         "updated_at": now,
         "source": {
-            "mineru_exit_code": parse["exit_code"],
-            "markdown_path": str(md_path) if md_path else None,
-            "content_list_path": str(parse["content_list_path"]) if parse["content_list_path"] else None,
+            "mineru_exit_code": parsed["exit_code"],
+            "mineru_backend": b,
+            "markdown_path": parsed["markdown_path"],
+            "content_list_path": parsed["content_list_path"],
             "content_list_items": len(content_list),
         },
         "summary": _summary(rows),
@@ -123,10 +259,11 @@ async def extract_financial_statements(
 
 
 def extract_rows_from_markdown(markdown: str, *, document_id: str, final_name: str, client: str) -> list[dict[str, Any]]:
-    tables = _markdown_tables(markdown)
+    lines = markdown.splitlines()
+    tables = _markdown_tables_from_lines(lines)
     rows: list[dict[str, Any]] = []
     for table_index, table in enumerate(tables):
-        context = _nearby_context(markdown, table["start"])
+        context = _nearby_context_from_lines(lines, table["start"])
         statement_type = _statement_type(context + "\n" + "\n".join(table["headers"]))
         if not statement_type:
             continue
@@ -262,8 +399,7 @@ def _read_content_list(path: Path | None) -> list[Any]:
         return []
 
 
-def _markdown_tables(markdown: str) -> list[dict[str, Any]]:
-    lines = markdown.splitlines()
+def _markdown_tables_from_lines(lines: list[str]) -> list[dict[str, Any]]:
     tables: list[dict[str, Any]] = []
     i = 0
     while i < len(lines) - 1:
@@ -281,85 +417,7 @@ def _markdown_tables(markdown: str) -> list[dict[str, Any]]:
             i += 1
         if len(headers) >= 2 and rows:
             tables.append({"headers": headers, "rows": rows, "start": start, "page": _page_before(lines, start)})
-        continue
     return tables
-
-
-def markdown_table_matrices(markdown: str) -> list[list[list[str]]]:
-    """Each Markdown pipe table as a matrix: header row followed by body rows."""
-    return [[t["headers"]] + t["rows"] for t in _markdown_tables(markdown)]
-
-
-def _safe_sheet_title(name: str) -> str:
-    s = re.sub(r"[\[\]:*?/\\]", "_", name).strip() or "Sheet"
-    return s[:31]
-
-
-def _unique_sheet_name(base: str, used: set[str]) -> str:
-    candidate = _safe_sheet_title(base)
-    if candidate not in used:
-        used.add(candidate)
-        return candidate
-    n = 2
-    while True:
-        suffix = f"_{n}"
-        truncated = _safe_sheet_title(base[: max(1, 31 - len(suffix))] + suffix)
-        if truncated not in used:
-            used.add(truncated)
-            return truncated
-        n += 1
-
-
-def tables_workbook_bytes(tables: list[list[list[str]]], *, stub_message: str | None = None) -> bytes:
-    try:
-        from openpyxl import Workbook
-    except ImportError as exc:
-        raise RuntimeError("Install openpyxl to build extraction workbooks") from exc
-    wb = Workbook()
-    if wb.active is not None:
-        wb.remove(wb.active)
-    used: set[str] = set()
-    for i, table in enumerate(tables):
-        title = _unique_sheet_name(f"Table_{i + 1}", used)
-        ws = wb.create_sheet(title=title)
-        for row in table:
-            ws.append([str(c) if c is not None else "" for c in row])
-    if not wb.sheetnames:
-        ws = wb.create_sheet(title="Extract")
-        ws.append([stub_message or "No pipe-style Markdown tables found"])
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
-
-
-async def deep_extract_tables_workbook(
-    src: Path,
-    *,
-    work_dir: Path,
-    backend: str | None = None,
-) -> tuple[bytes, dict[str, Any]]:
-    """Full MinerU parse (default VLM backend), then one sheet per Markdown table."""
-    b = (backend or os.environ.get("MINERU_DEEP_BACKEND", "vlm-auto-engine") or "vlm-auto-engine").strip()
-    parse = await run_mineru_full(src, work_dir, backend=b)
-    md_path = parse.get("markdown_path")
-    markdown = md_path.read_text(encoding="utf-8", errors="replace") if md_path else ""
-    tables = markdown_table_matrices(markdown)
-    stub = (
-        "No pipe-style Markdown tables found. "
-        "Try another MINERU_DEEP_BACKEND or inspect MinerU Markdown output."
-    )
-    meta: dict[str, Any] = {
-        "mineru_exit_code": parse.get("exit_code"),
-        "mineru_backend": b,
-        "table_count": len(tables),
-        "markdown_path": str(md_path) if md_path else None,
-        "content_list_path": str(parse.get("content_list_path")) if parse.get("content_list_path") else None,
-    }
-    xlsx = tables_workbook_bytes(
-        tables,
-        stub_message=stub,
-    )
-    return xlsx, meta
 
 
 def _is_table_row(line: str) -> bool:
@@ -379,10 +437,13 @@ def _clean_cell(cell: Any) -> str:
     return re.sub(r"\s+", " ", str(cell or "").replace("<br>", " ")).strip()
 
 
-def _nearby_context(markdown: str, line_index: int, radius: int = 8) -> str:
-    lines = markdown.splitlines()
+def _nearby_context_from_lines(lines: list[str], line_index: int, radius: int = 8) -> str:
     start = max(0, line_index - radius)
     return "\n".join(lines[start:line_index])
+
+
+def _nearby_context(markdown: str, line_index: int, radius: int = 8) -> str:
+    return _nearby_context_from_lines(markdown.splitlines(), line_index, radius)
 
 
 def _statement_type(text: str) -> str | None:
